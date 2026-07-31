@@ -57,6 +57,9 @@ public:
 
   virtual void setCommandMangler(CommandMangler Mangler) {}
 
+  /// Sets file paths to consider when scanning for module providers.
+  virtual void setAdditionalFilesForScanning(std::vector<Path> Files) {}
+
   virtual ~ProjectModules() = default;
 };
 

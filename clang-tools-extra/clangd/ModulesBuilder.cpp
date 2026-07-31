@@ -10,6 +10,7 @@
 #include "Compiler.h"
 #include "SourceCode.h"
 #include "support/Logger.h"
+#include "clang/Driver/Types.h"
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Frontend/FrontendActions.h"
 #include "clang/Serialization/ASTReader.h"
@@ -72,6 +73,14 @@ std::string normalizePathForCache(PathRef Path) {
   llvm::SmallString<256> Normalized(Path);
   llvm::sys::path::remove_dots(Normalized, /*remove_dot_dot=*/true);
   return maybeCaseFoldPath(Normalized);
+}
+
+bool isCXXModuleInterface(PathRef File) {
+  llvm::StringRef Extension = llvm::sys::path::extension(File);
+  if (!Extension.consume_front("."))
+    return false;
+  return driver::types::lookupTypeForExtension(Extension) ==
+         driver::types::TY_CXXModule;
 }
 
 /// Returns the root directory used for persistent module cache storage.
@@ -1023,10 +1032,11 @@ class ModulesBuilder::ModulesBuilderImpl {
 public:
   ModulesBuilderImpl(const GlobalCompilationDatabase &CDB) : Cache(CDB) {}
 
-  ModuleNameToSourceCache &getProjectModulesCache() {
-    return ProjectModulesCache;
-  }
   const GlobalCompilationDatabase &getCDB() const { return Cache.getCDB(); }
+
+  void observeSourcePath(PathRef File);
+  std::unique_ptr<CachingProjectModules>
+  getProjectModules(PathRef File, bool IncludeObservedSources);
 
   llvm::Error
   getOrBuildModuleFile(PathRef RequiredSource, StringRef ModuleName,
@@ -1034,6 +1044,8 @@ public:
                        ReusablePrerequisiteModules &BuiltModuleFiles);
 
 private:
+  std::vector<Path> getObservedSources(PathRef File);
+
   /// Try to get prebuilt module files from the compilation database.
   void getPrebuiltModuleFile(StringRef ModuleName, PathRef ModuleUnitFileName,
                              const ThreadsafeFS &TFS,
@@ -1044,9 +1056,62 @@ private:
 
   ModuleFileCache Cache;
   ModuleNameToSourceCache ProjectModulesCache;
+  std::mutex ObservedSourcesMutex;
+  llvm::StringMap<Path> ObservedSources;
   std::mutex GarbageCollectedProjectRootsMutex;
   llvm::StringSet<> GarbageCollectedProjectRoots;
 };
+
+void ModulesBuilder::ModulesBuilderImpl::observeSourcePath(PathRef File) {
+  if (!isCXXModuleInterface(File))
+    return;
+
+  std::string NormalizedFile = normalizePathForCache(File);
+  std::lock_guard<std::mutex> Lock(ObservedSourcesMutex);
+  ObservedSources.try_emplace(NormalizedFile, File.str());
+}
+
+std::vector<Path>
+ModulesBuilder::ModulesBuilderImpl::getObservedSources(PathRef File) {
+  auto PI = getCDB().getProjectInfo(File);
+  if (!PI || PI->SourceRoot.empty())
+    return {};
+  std::string ProjectKey = normalizePathForCache(PI->SourceRoot);
+
+  std::vector<Path> Observed;
+  {
+    std::lock_guard<std::mutex> Lock(ObservedSourcesMutex);
+    Observed.reserve(ObservedSources.size());
+    for (const auto &Source : ObservedSources)
+      Observed.push_back(Source.second);
+  }
+
+  std::vector<Path> Sources;
+  Sources.reserve(Observed.size());
+  for (const auto &Source : Observed) {
+    auto SourcePI = getCDB().getProjectInfo(Source);
+    if (SourcePI && normalizePathForCache(SourcePI->SourceRoot) == ProjectKey)
+      Sources.push_back(Source);
+  }
+  return Sources;
+}
+
+std::unique_ptr<CachingProjectModules>
+ModulesBuilder::ModulesBuilderImpl::getProjectModules(
+    PathRef File, bool IncludeObservedSources) {
+  std::unique_ptr<ProjectModules> MDB = getCDB().getProjectModules(File);
+  if (!MDB)
+    return nullptr;
+
+  if (IncludeObservedSources) {
+    auto ObservedSources = getObservedSources(File);
+    if (!ObservedSources.empty())
+      MDB->setAdditionalFilesForScanning(std::move(ObservedSources));
+  }
+
+  return std::make_unique<CachingProjectModules>(std::move(MDB),
+                                                 ProjectModulesCache);
+}
 
 void ModulesBuilder::ModulesBuilderImpl::
     garbageCollectModuleCacheForProjectRoot(PathRef ProjectRoot) {
@@ -1232,38 +1297,28 @@ llvm::Error ModulesBuilder::ModulesBuilderImpl::getOrBuildModuleFile(
 }
 
 bool ModulesBuilder::hasRequiredModules(PathRef File) {
-  std::unique_ptr<ProjectModules> MDB = Impl->getCDB().getProjectModules(File);
+  auto MDB = Impl->getProjectModules(File, /*IncludeObservedSources=*/false);
   if (!MDB)
     return false;
-
-  CachingProjectModules CachedMDB(std::move(MDB),
-                                  Impl->getProjectModulesCache());
-  return !CachedMDB.getRequiredModules(File).empty();
+  return !MDB->getRequiredModules(File).empty();
 }
 
 std::vector<std::string> ModulesBuilder::getRequiredModuleNames(PathRef File) {
-  std::unique_ptr<ProjectModules> MDB = Impl->getCDB().getProjectModules(File);
+  auto MDB = Impl->getProjectModules(File, /*IncludeObservedSources=*/false);
   if (!MDB)
     return {};
-
-  CachingProjectModules CachedMDB(std::move(MDB),
-                                  Impl->getProjectModulesCache());
-  return CachedMDB.getRequiredModules(File);
+  return MDB->getRequiredModules(File);
 }
 
 std::unique_ptr<PrerequisiteModules>
 ModulesBuilder::buildPrerequisiteModulesFor(PathRef File,
                                             const ThreadsafeFS &TFS) {
-  std::unique_ptr<ProjectModules> MDB = Impl->getCDB().getProjectModules(File);
+  auto MDB = Impl->getProjectModules(File, /*IncludeObservedSources=*/true);
   if (!MDB) {
     elog("Failed to get Project Modules information for {0}", File);
     return std::make_unique<FailedPrerequisiteModules>();
   }
-  CachingProjectModules CachedMDB(std::move(MDB),
-                                  Impl->getProjectModulesCache());
-
-  std::vector<std::string> RequiredModuleNames =
-      CachedMDB.getRequiredModules(File);
+  std::vector<std::string> RequiredModuleNames = MDB->getRequiredModules(File);
   if (RequiredModuleNames.empty())
     return std::make_unique<ReusablePrerequisiteModules>();
 
@@ -1272,7 +1327,7 @@ ModulesBuilder::buildPrerequisiteModulesFor(PathRef File,
   for (llvm::StringRef RequiredModuleName : RequiredModuleNames) {
     // Return early if there is any error.
     if (llvm::Error Err = Impl->getOrBuildModuleFile(
-            File, RequiredModuleName, TFS, CachedMDB, *RequiredModules.get())) {
+            File, RequiredModuleName, TFS, *MDB, *RequiredModules.get())) {
       elog("Failed to build module {0}; due to {1}", RequiredModuleName,
            toString(std::move(Err)));
       return std::make_unique<FailedPrerequisiteModules>();
@@ -1287,6 +1342,10 @@ ModulesBuilder::ModulesBuilder(const GlobalCompilationDatabase &CDB) {
 }
 
 ModulesBuilder::~ModulesBuilder() {}
+
+void ModulesBuilder::observeSourcePath(PathRef File) {
+  Impl->observeSourcePath(File);
+}
 
 } // namespace clangd
 } // namespace clang

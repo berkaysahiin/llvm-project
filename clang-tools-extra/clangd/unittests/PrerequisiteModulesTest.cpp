@@ -12,6 +12,7 @@
 #ifndef _WIN32
 
 #include "Annotations.h"
+#include "ClangdServer.h"
 #include "CodeComplete.h"
 #include "Compiler.h"
 #include "ModulesBuilder.h"
@@ -57,6 +58,10 @@ public:
     Underlying->setCommandMangler(std::move(Mangler));
   }
 
+  void setAdditionalFilesForScanning(std::vector<Path> Files) override {
+    Underlying->setAdditionalFilesForScanning(std::move(Files));
+  }
+
   std::string getSourceForModuleName(llvm::StringRef ModuleName,
                                      PathRef RequiredSrcFile) override {
     Count++;
@@ -75,11 +80,11 @@ private:
 class PerFileModulesCompilationDatabase : public GlobalCompilationDatabase {
 public:
   PerFileModulesCompilationDatabase(StringRef TestDir, const ThreadsafeFS &TFS)
-      : Directory(TestDir), TFS(TFS),
-        ToolingCDB(std::make_shared<IndexedCompilationDatabase>(*this)) {}
+      : Directory(TestDir), TFS(TFS) {}
 
   void addFile(llvm::StringRef Path, llvm::StringRef Contents,
-               std::vector<std::string> ExtraFlags = {}) {
+               std::vector<std::string> ExtraFlags = {},
+               bool AddCommand = true) {
     ASSERT_FALSE(llvm::sys::path::is_absolute(Path));
 
     SmallString<256> AbsPath(Directory);
@@ -97,17 +102,21 @@ public:
     CommandLine.insert(CommandLine.end(), ExtraFlags.begin(), ExtraFlags.end());
     CommandLine.push_back(std::string(AbsPath));
 
-    Commands[maybeCaseFoldPath(AbsPath)] = tooling::CompileCommand(
-        Directory, std::string(AbsPath), std::move(CommandLine), "");
-    Files.push_back(std::string(AbsPath));
+    if (AddCommand) {
+      Commands[maybeCaseFoldPath(AbsPath)] = tooling::CompileCommand(
+          Directory, std::string(AbsPath), std::move(CommandLine), "");
+      Files.push_back(std::string(AbsPath));
+    }
+    ToolingCDB = tooling::inferMissingCompileCommands(
+        std::make_unique<IndexedCompilationDatabase>(*this));
   }
 
   std::optional<tooling::CompileCommand>
   getCompileCommand(PathRef File) const override {
-    auto It = Commands.find(maybeCaseFoldPath(File));
-    if (It == Commands.end())
+    auto Candidates = ToolingCDB->getCompileCommands(File);
+    if (Candidates.empty())
       return std::nullopt;
-    tooling::CompileCommand Cmd = It->second;
+    tooling::CompileCommand Cmd = std::move(Candidates.front());
     if (llvm::any_of(Cmd.CommandLine, [](llvm::StringRef Arg) {
           return Arg.starts_with("@");
         })) {
@@ -137,8 +146,9 @@ private:
 
     std::vector<tooling::CompileCommand>
     getCompileCommands(StringRef FilePath) const override {
-      if (auto Cmd = CDB.getCompileCommand(FilePath))
-        return {*Cmd};
+      auto It = CDB.Commands.find(maybeCaseFoldPath(FilePath));
+      if (It != CDB.Commands.end())
+        return {It->second};
       return {};
     }
 
@@ -152,7 +162,7 @@ private:
   const ThreadsafeFS &TFS;
   llvm::StringMap<tooling::CompileCommand> Commands;
   std::vector<std::string> Files;
-  std::shared_ptr<IndexedCompilationDatabase> ToolingCDB;
+  std::shared_ptr<const tooling::CompilationDatabase> ToolingCDB;
 };
 
 class ModuleUnitRootCompilationDatabase
@@ -168,6 +178,26 @@ public:
     llvm::sys::path::remove_filename(Root);
     return ProjectInfo{std::string(Root)};
   }
+};
+
+class MutableProjectCompilationDatabase
+    : public PerFileModulesCompilationDatabase {
+public:
+  using PerFileModulesCompilationDatabase::PerFileModulesCompilationDatabase;
+
+  void setProjectRoot(PathRef File, PathRef Root) {
+    ProjectRoots[maybeCaseFoldPath(File)] = Root.str();
+  }
+
+  std::optional<ProjectInfo> getProjectInfo(PathRef File) const override {
+    auto It = ProjectRoots.find(maybeCaseFoldPath(File));
+    if (It != ProjectRoots.end())
+      return ProjectInfo{It->second};
+    return PerFileModulesCompilationDatabase::getProjectInfo(File);
+  }
+
+private:
+  llvm::StringMap<Path> ProjectRoots;
 };
 
 class MockDirectoryCompilationDatabase : public MockCompilationDatabase {
@@ -1018,6 +1048,114 @@ int useB() { return value; }
 
   EXPECT_EQ(ProjectModules->getModuleNameState("M"),
             ProjectModules::ModuleNameState::Unique);
+}
+
+TEST_F(PrerequisiteModulesTests, ObservedInferredModuleProvider) {
+  PerFileModulesCompilationDatabase Base(TestDir, FS);
+  Base.addFile("Use.cpp", R"cpp(
+import M;
+int use() { return value; }
+  )cpp");
+  Base.addFile("M.ccm", R"cpp(
+export module M;
+#ifndef ENABLE_MODULE
+#error command mangler was not applied
+#endif
+export int value = 1;
+  )cpp",
+               {}, /*AddCommand=*/false);
+  OverlayCDB CDB(
+      &Base, /*FallbackFlags=*/{}, [](tooling::CompileCommand &Cmd, PathRef) {
+        Cmd.CommandLine.insert(Cmd.CommandLine.begin() + 1, "-DENABLE_MODULE");
+      });
+
+  ModulesBuilder Builder(CDB);
+  HeaderSearchOptions Before(TestDir);
+  Builder.buildPrerequisiteModulesFor(getFullPath("Use.cpp"), FS)
+      ->adjustHeaderSearchOptions(Before);
+  EXPECT_EQ(Before.PrebuiltModuleFiles.count("M"), 0u);
+
+  Builder.observeSourcePath(getFullPath("M.ccm"));
+  auto Modules =
+      Builder.buildPrerequisiteModulesFor(getFullPath("Use.cpp"), FS);
+  HeaderSearchOptions After(TestDir);
+  Modules->adjustHeaderSearchOptions(After);
+  ASSERT_EQ(After.PrebuiltModuleFiles.count("M"), 1u);
+
+  auto Inputs = getInputs("Use.cpp", CDB);
+  Inputs.ModulesManager = &Builder;
+  auto CI = buildCompilerInvocation(Inputs, DiagConsumer);
+  ASSERT_TRUE(CI);
+  auto Preamble = buildPreamble(getFullPath("Use.cpp"), *CI, Inputs,
+                                /*StoreInMemory=*/true, nullptr);
+  ASSERT_TRUE(Preamble);
+  auto AST = ParsedAST::build(getFullPath("Use.cpp"), Inputs, std::move(CI), {},
+                              Preamble);
+  ASSERT_TRUE(AST);
+  EXPECT_TRUE(AST->getDiagnostics().empty());
+  EXPECT_TRUE(findDecl(*AST, "value").isFromASTFile());
+}
+
+TEST_F(PrerequisiteModulesTests, DocumentLifecycleObservesProvider) {
+  PerFileModulesCompilationDatabase CDB(TestDir, FS);
+  CDB.addFile("Use.cpp", "import M;");
+  CDB.addFile("M.cppm", "export module M;", {}, /*AddCommand=*/false);
+  ModulesBuilder Builder(CDB);
+
+  auto Opts = ClangdServer::optsForTest();
+  Opts.AsyncThreadsCount = 0;
+  Opts.SkipPreambleBuild = true;
+  Opts.ModulesManager = &Builder;
+  ClangdServer Server(CDB, FS, Opts);
+  Server.addDocument(getFullPath("M.cppm"), "export module M;");
+
+  HeaderSearchOptions First(TestDir);
+  Builder.buildPrerequisiteModulesFor(getFullPath("Use.cpp"), FS)
+      ->adjustHeaderSearchOptions(First);
+  EXPECT_EQ(First.PrebuiltModuleFiles.count("M"), 1u);
+}
+
+TEST_F(PrerequisiteModulesTests, ObservedProviderFollowsCurrentProject) {
+  MutableProjectCompilationDatabase CDB(TestDir, FS);
+  CDB.addFile("Use.cpp", "import M;");
+  CDB.addFile("M.cppm", "export module M;", {}, /*AddCommand=*/false);
+
+  llvm::SmallString<256> ProjectA(TestDir), ProjectB(TestDir);
+  llvm::sys::path::append(ProjectA, "a");
+  llvm::sys::path::append(ProjectB, "b");
+  ASSERT_FALSE(llvm::sys::fs::create_directories(ProjectA));
+  ASSERT_FALSE(llvm::sys::fs::create_directories(ProjectB));
+
+  std::string Use = getFullPath("Use.cpp");
+  std::string Provider = getFullPath("M.cppm");
+  CDB.setProjectRoot(Use, ProjectB);
+  CDB.setProjectRoot(Provider, ProjectA);
+
+  ModulesBuilder Builder(CDB);
+  Builder.observeSourcePath(Provider);
+  HeaderSearchOptions Before(TestDir);
+  Builder.buildPrerequisiteModulesFor(Use, FS)->adjustHeaderSearchOptions(
+      Before);
+  EXPECT_EQ(Before.PrebuiltModuleFiles.count("M"), 0u);
+
+  CDB.setProjectRoot(Provider, ProjectB);
+  HeaderSearchOptions After(TestDir);
+  Builder.buildPrerequisiteModulesFor(Use, FS)->adjustHeaderSearchOptions(
+      After);
+  EXPECT_EQ(After.PrebuiltModuleFiles.count("M"), 1u);
+}
+
+TEST_F(PrerequisiteModulesTests, UnrecognizedModuleExtensionIsNotObserved) {
+  PerFileModulesCompilationDatabase CDB(TestDir, FS);
+  CDB.addFile("Use.cpp", "import M;");
+  CDB.addFile("M.ixx", "export module M;", {}, /*AddCommand=*/false);
+
+  ModulesBuilder Builder(CDB);
+  Builder.observeSourcePath(getFullPath("M.ixx"));
+  HeaderSearchOptions HS(TestDir);
+  Builder.buildPrerequisiteModulesFor(getFullPath("Use.cpp"), FS)
+      ->adjustHeaderSearchOptions(HS);
+  EXPECT_EQ(HS.PrebuiltModuleFiles.count("M"), 0u);
 }
 
 TEST_F(PrerequisiteModulesTests,

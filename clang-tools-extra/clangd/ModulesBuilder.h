@@ -98,6 +98,9 @@ public:
   ModulesBuilder &operator=(const ModulesBuilder &) = delete;
   ModulesBuilder &operator=(ModulesBuilder &&) = delete;
 
+  /// Makes a module interface available to project-wide module scans.
+  void observeSourcePath(PathRef File);
+
   std::unique_ptr<PrerequisiteModules>
   buildPrerequisiteModulesFor(PathRef File, const ThreadsafeFS &TFS);
 

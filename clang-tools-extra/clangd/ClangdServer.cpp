@@ -299,6 +299,8 @@ ClangdServer::~ClangdServer() {
 void ClangdServer::addDocument(PathRef File, llvm::StringRef Contents,
                                llvm::StringRef Version,
                                WantDiagnostics WantDiags, bool ForceRebuild) {
+  if (ModulesManager)
+    ModulesManager->observeSourcePath(File);
   std::string ActualVersion = DraftMgr.addDraft(File, Version, Contents);
   ParseOptions Opts;
   Opts.PreambleParseForwardingFunctions = PreambleParseForwardingFunctions;

@@ -181,6 +181,10 @@ public:
   /// to provide the map.
   void globalScan(const ProjectModules::CommandMangler &Mangler);
 
+  void setAdditionalFiles(std::vector<Path> Files) {
+    AdditionalFiles = std::move(Files);
+  }
+
   /// Get the source file from the module name. Note that the language
   /// guarantees all the module names are unique in a valid program.
   /// This function should only be called after globalScan.
@@ -204,6 +208,8 @@ private:
   clang::dependencies::DependencyScanningService Service;
 
   // TODO: Add a scanning cache.
+
+  std::vector<Path> AdditionalFiles;
 
   // Map module name to source file path.
   llvm::StringMap<std::string> ModuleNameToSource;
@@ -269,6 +275,8 @@ void ModuleDependencyScanner::globalScan(
 
   for (auto &File : CDB->getAllFiles())
     scan(File, Mangler);
+  for (const auto &File : AdditionalFiles)
+    scan(File, Mangler);
 
   GlobalScanned = true;
 }
@@ -318,6 +326,10 @@ public:
 
   void setCommandMangler(CommandMangler Mangler) override {
     this->Mangler = std::move(Mangler);
+  }
+
+  void setAdditionalFilesForScanning(std::vector<Path> Files) override {
+    Scanner.setAdditionalFiles(std::move(Files));
   }
 
   /// RequiredSourceFile is not used intentionally. See the comments of
@@ -575,6 +587,10 @@ public:
     };
     CompileCommands->setCommandMangler(ForwardMangler);
     Scanning->setCommandMangler(std::move(ForwardMangler));
+  }
+
+  void setAdditionalFilesForScanning(std::vector<Path> Files) override {
+    Scanning->setAdditionalFilesForScanning(std::move(Files));
   }
 
 private:
