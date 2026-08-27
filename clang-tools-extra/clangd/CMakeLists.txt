@@ -97,7 +97,7 @@ add_clang_library(clangDaemon STATIC
   InlayHints.cpp
   JSONTransport.cpp
   LSPBinder.cpp
-  ModulesManager.cpp
+  ModulesBuilder.cpp
   PathMapping.cpp
   ProjectModules.cpp
   Protocol.cpp

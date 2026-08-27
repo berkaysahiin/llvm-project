@@ -113,7 +113,7 @@ static_library("clangd") {
     "InlayHints.cpp",
     "JSONTransport.cpp",
     "LSPBinder.cpp",
-    "ModulesManager.cpp",
+    "ModulesBuilder.cpp",
     "ParsedAST.cpp",
     "PathMapping.cpp",
     "Preamble.cpp",

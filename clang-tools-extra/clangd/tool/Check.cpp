@@ -151,7 +151,7 @@ class Checker {
   ParseInputs Inputs;
   std::unique_ptr<CompilerInvocation> Invocation;
   format::FormatStyle Style;
-  std::optional<ModulesManager> Modules;
+  std::optional<ModulesBuilder> ModulesManager;
   // from buildAST
   std::shared_ptr<const PreambleData> Preamble;
   std::optional<ParsedAST> AST;
@@ -220,9 +220,9 @@ public:
       }
     }
     if (Opts.EnableExperimentalModulesSupport) {
-      if (!Modules)
-        Modules.emplace(*CDB);
-      Inputs.Modules = &*Modules;
+      if (!ModulesManager)
+        ModulesManager.emplace(*CDB);
+      Inputs.ModulesManager = &*ModulesManager;
     }
     log("Parsing command...");
     Invocation =

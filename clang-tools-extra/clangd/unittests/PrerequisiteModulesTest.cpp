@@ -14,7 +14,7 @@
 #include "Annotations.h"
 #include "CodeComplete.h"
 #include "Compiler.h"
-#include "ModulesManager.h"
+#include "ModulesBuilder.h"
 #include "Preamble.h"
 #include "ProjectModules.h"
 #include "SemanticHighlighting.h"
@@ -300,11 +300,11 @@ void use() {
 }
   )cpp");
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
   // NonModular.cpp is not related to modules. So nothing should be built.
   auto NonModularInfo =
-      Manager.buildPrerequisiteModulesFor(getFullPath("NonModular.cpp"), FS);
+      Builder.buildPrerequisiteModulesFor(getFullPath("NonModular.cpp"), FS);
   EXPECT_TRUE(NonModularInfo);
 
   HeaderSearchOptions HSOpts;
@@ -329,9 +329,9 @@ module;
 export module M;
   )cpp");
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
-  auto MInfo = Manager.buildPrerequisiteModulesFor(getFullPath("M.cppm"), FS);
+  auto MInfo = Builder.buildPrerequisiteModulesFor(getFullPath("M.cppm"), FS);
   EXPECT_TRUE(MInfo);
 
   // Nothing should be built since M doesn't dependent on anything.
@@ -401,9 +401,9 @@ import M;
 export module N:Part;
   )cpp");
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
-  auto NInfo = Manager.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
+  auto NInfo = Builder.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
   EXPECT_TRUE(NInfo);
 
   ParseInputs NInput = getInputs("N.cppm", CDB);
@@ -462,9 +462,9 @@ import M;
 export module N:Part;
   )cpp");
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
-  auto NInfo = Manager.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
+  auto NInfo = Builder.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
   EXPECT_TRUE(NInfo);
   EXPECT_TRUE(NInfo);
 
@@ -500,7 +500,7 @@ export int mm = 44;
   )cpp");
     EXPECT_FALSE(NInfo->canReuse(*Invocation, FS.view(TestDir)));
 
-    NInfo = Manager.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
+    NInfo = Builder.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
     EXPECT_TRUE(NInfo->canReuse(*Invocation, FS.view(TestDir)));
 
     CDB.addFile("foo.h", R"cpp(
@@ -509,7 +509,7 @@ inline void foo(int) {}
   )cpp");
     EXPECT_FALSE(NInfo->canReuse(*Invocation, FS.view(TestDir)));
 
-    NInfo = Manager.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
+    NInfo = Builder.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
     EXPECT_TRUE(NInfo->canReuse(*Invocation, FS.view(TestDir)));
   }
 
@@ -519,7 +519,7 @@ export module N:Part;
 export int NPart = 4LIdjwldijaw
   )cpp");
   EXPECT_FALSE(NInfo->canReuse(*Invocation, FS.view(TestDir)));
-  NInfo = Manager.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
+  NInfo = Builder.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
   EXPECT_TRUE(NInfo);
   EXPECT_FALSE(NInfo->canReuse(*Invocation, FS.view(TestDir)));
 
@@ -529,7 +529,7 @@ export int NPart = 43;
   )cpp");
   EXPECT_TRUE(NInfo);
   EXPECT_FALSE(NInfo->canReuse(*Invocation, FS.view(TestDir)));
-  NInfo = Manager.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
+  NInfo = Builder.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
   EXPECT_TRUE(NInfo);
   EXPECT_TRUE(NInfo->canReuse(*Invocation, FS.view(TestDir)));
 
@@ -577,10 +577,10 @@ import A;
 int use() { return a; }
   )cpp");
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
   auto UseInfo =
-      Manager.buildPrerequisiteModulesFor(getFullPath("Use.cpp"), FS);
+      Builder.buildPrerequisiteModulesFor(getFullPath("Use.cpp"), FS);
   ASSERT_TRUE(UseInfo);
 
   HeaderSearchOptions HSOpts;
@@ -609,10 +609,10 @@ export void printA();
 import A;
 )cpp");
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
   ParseInputs Use = getInputs("Use.cpp", CDB);
-  Use.Modules = &Manager;
+  Use.ModulesManager = &Builder;
 
   std::unique_ptr<CompilerInvocation> CI =
       buildCompilerInvocation(Use, DiagConsumer);
@@ -651,10 +651,10 @@ void func() {
   CDB.addFile("Use.cpp", UserContents);
   Annotations Test(UserContents);
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
   ParseInputs Use = getInputs("Use.cpp", CDB);
-  Use.Modules = &Manager;
+  Use.ModulesManager = &Builder;
 
   std::unique_ptr<CompilerInvocation> CI =
       buildCompilerInvocation(Use, DiagConsumer);
@@ -690,10 +690,10 @@ void func() {
   CDB.addFile("Use.cpp", UserContents);
   Annotations Test(UserContents);
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
   ParseInputs Use = getInputs("Use.cpp", CDB);
-  Use.Modules = &Manager;
+  Use.ModulesManager = &Builder;
 
   std::unique_ptr<CompilerInvocation> CI =
       buildCompilerInvocation(Use, DiagConsumer);
@@ -730,11 +730,11 @@ import M;
 export int B = 44 + M;
   )cpp");
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
-  auto AInfo = Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+  auto AInfo = Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
   EXPECT_TRUE(AInfo);
-  auto BInfo = Manager.buildPrerequisiteModulesFor(getFullPath("B.cppm"), FS);
+  auto BInfo = Builder.buildPrerequisiteModulesFor(getFullPath("B.cppm"), FS);
   EXPECT_TRUE(BInfo);
   HeaderSearchOptions HSOptsA(TestDir);
   HeaderSearchOptions HSOptsB(TestDir);
@@ -754,21 +754,21 @@ export constexpr int M = 43;
   )cpp");
 
   ParseInputs AUse = getInputs("A.cppm", CDB);
-  AUse.Modules = &Manager;
+  AUse.ModulesManager = &Builder;
   std::unique_ptr<CompilerInvocation> AInvocation =
       buildCompilerInvocation(AUse, DiagConsumer);
   EXPECT_FALSE(AInfo->canReuse(*AInvocation, FS.view(TestDir)));
 
   ParseInputs BUse = getInputs("B.cppm", CDB);
-  AUse.Modules = &Manager;
+  AUse.ModulesManager = &Builder;
   std::unique_ptr<CompilerInvocation> BInvocation =
       buildCompilerInvocation(BUse, DiagConsumer);
   EXPECT_FALSE(BInfo->canReuse(*BInvocation, FS.view(TestDir)));
 
   auto NewAInfo =
-      Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+      Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
   auto NewBInfo =
-      Manager.buildPrerequisiteModulesFor(getFullPath("B.cppm"), FS);
+      Builder.buildPrerequisiteModulesFor(getFullPath("B.cppm"), FS);
   EXPECT_TRUE(NewAInfo);
   EXPECT_TRUE(NewBInfo);
   HeaderSearchOptions NewHSOptsA(TestDir);
@@ -801,10 +801,10 @@ export module B;
 import M;
   )cpp");
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
-  Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
-  Manager.buildPrerequisiteModulesFor(getFullPath("B.cppm"), FS);
+  Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+  Builder.buildPrerequisiteModulesFor(getFullPath("B.cppm"), FS);
   EXPECT_EQ(CDB.getGlobalScanningCount(), 1u);
   EXPECT_EQ(CDB.getProjectModulesCount(), 1u);
 }
@@ -840,10 +840,10 @@ import M;
 export module N:Part;
   )cpp");
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
   // Build prerequisite modules for N (which depends on M)
-  auto NInfo = Manager.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
+  auto NInfo = Builder.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
   ASSERT_TRUE(NInfo);
 
   ParseInputs NInput = getInputs("N.cppm", CDB);
@@ -861,7 +861,7 @@ inline int getValue() { return 43; }
   EXPECT_FALSE(NInfo->canReuse(*Invocation, FS.view(TestDir)));
 
   // Rebuild and verify canReuse returns true again
-  NInfo = Manager.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
+  NInfo = Builder.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
   ASSERT_TRUE(NInfo);
   EXPECT_TRUE(NInfo->canReuse(*Invocation, FS.view(TestDir)));
 
@@ -876,7 +876,7 @@ export int m_new_value = 10;
   EXPECT_FALSE(NInfo->canReuse(*Invocation, FS.view(TestDir)));
 
   // Rebuild after module source change
-  NInfo = Manager.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
+  NInfo = Builder.buildPrerequisiteModulesFor(getFullPath("N.cppm"), FS);
   ASSERT_TRUE(NInfo);
   EXPECT_TRUE(NInfo->canReuse(*Invocation, FS.view(TestDir)));
 }
@@ -892,18 +892,18 @@ export module M;
 import M;
   )cpp");
 
-  // Use ModulesManager to produce the prebuilt module file.
-  ModulesManager Manager(CDB);
+  // Use ModulesBuilder to produce the prebuilt module file.
+  ModulesBuilder Builder(CDB);
   auto ModuleInfo =
-      Manager.buildPrerequisiteModulesFor(getFullPath("U.cpp"), FS);
+      Builder.buildPrerequisiteModulesFor(getFullPath("U.cpp"), FS);
   HeaderSearchOptions HS(TestDir);
   ModuleInfo->adjustHeaderSearchOptions(HS);
 
   CDB.ExtraClangFlags.push_back("-fmodule-file=M=" +
                                 HS.PrebuiltModuleFiles["M"]);
-  ModulesManager Manager2(CDB);
+  ModulesBuilder Builder2(CDB);
   auto ModuleInfo2 =
-      Manager2.buildPrerequisiteModulesFor(getFullPath("U.cpp"), FS);
+      Builder2.buildPrerequisiteModulesFor(getFullPath("U.cpp"), FS);
   HeaderSearchOptions HS2(TestDir);
   ModuleInfo2->adjustHeaderSearchOptions(HS2);
 
@@ -927,10 +927,10 @@ import M;
 int use() { return m_value; }
   )cpp");
 
-  // Step 1: Build the module file using ModulesManager
-  ModulesManager Manager(CDB);
+  // Step 1: Build the module file using ModulesBuilder
+  ModulesBuilder Builder(CDB);
   auto ModuleInfo =
-      Manager.buildPrerequisiteModulesFor(getFullPath("U.cpp"), FS);
+      Builder.buildPrerequisiteModulesFor(getFullPath("U.cpp"), FS);
   ASSERT_TRUE(ModuleInfo);
 
   HeaderSearchOptions HS(TestDir);
@@ -978,8 +978,8 @@ int use() { return m_value; }
                                                 RelativeBMPath);
 
   // Step 5: Verify that clangd can find and reuse the prebuilt module file
-  ModulesManager ManagerWithRelativePath(CDBWithRelativePath);
-  auto ModuleInfo2 = ManagerWithRelativePath.buildPrerequisiteModulesFor(
+  ModulesBuilder BuilderWithRelativePath(CDBWithRelativePath);
+  auto ModuleInfo2 = BuilderWithRelativePath.buildPrerequisiteModulesFor(
       getFullPath("U.cpp"), FS);
   ASSERT_TRUE(ModuleInfo2);
 
@@ -1183,12 +1183,12 @@ int useB() { return onlyB; }
   )cpp",
               {"-fmodule-file=M=" + std::string(BPcm)});
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
   auto AInfo =
-      Manager.buildPrerequisiteModulesFor(getFullPath("a/Use.cpp"), FS);
+      Builder.buildPrerequisiteModulesFor(getFullPath("a/Use.cpp"), FS);
   auto BInfo =
-      Manager.buildPrerequisiteModulesFor(getFullPath("b/Use.cpp"), FS);
+      Builder.buildPrerequisiteModulesFor(getFullPath("b/Use.cpp"), FS);
   ASSERT_TRUE(AInfo);
   ASSERT_TRUE(BInfo);
 
@@ -1201,7 +1201,7 @@ int useB() { return onlyB; }
   EXPECT_NE(HSA.PrebuiltModuleFiles["M"], HSB.PrebuiltModuleFiles["M"]);
 
   auto UseA = getInputs("a/Use.cpp", CDB);
-  UseA.Modules = &Manager;
+  UseA.ModulesManager = &Builder;
   auto CIA = buildCompilerInvocation(UseA, DiagConsumer);
   ASSERT_TRUE(CIA);
   auto PreambleA = buildPreamble(getFullPath("a/Use.cpp"), *CIA, UseA,
@@ -1213,7 +1213,7 @@ int useB() { return onlyB; }
   EXPECT_TRUE(findDecl(*ASTA, "onlyA").isFromASTFile());
 
   auto UseB = getInputs("b/Use.cpp", CDB);
-  UseB.Modules = &Manager;
+  UseB.ModulesManager = &Builder;
   auto CIB = buildCompilerInvocation(UseB, DiagConsumer);
   ASSERT_TRUE(CIB);
   auto PreambleB = buildPreamble(getFullPath("b/Use.cpp"), *CIB, UseB,
@@ -1225,7 +1225,7 @@ int useB() { return onlyB; }
   EXPECT_TRUE(findDecl(*ASTB, "onlyB").isFromASTFile());
 }
 
-TEST_F(PrerequisiteModulesTests, PersistentModuleCacheReusedAcrossManagers) {
+TEST_F(PrerequisiteModulesTests, PersistentModuleCacheReusedAcrossBuilders) {
   MockDirectoryCompilationDatabase CDB(TestDir, FS);
 
   CDB.addFile("M.cppm", R"cpp(
@@ -1240,8 +1240,8 @@ export int AValue = MValue;
 
   std::string FirstPCMPath;
   {
-    ModulesManager Manager(CDB);
-    auto AInfo = Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+    ModulesBuilder Builder(CDB);
+    auto AInfo = Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
     ASSERT_TRUE(AInfo);
     HeaderSearchOptions HS(TestDir);
     AInfo->adjustHeaderSearchOptions(HS);
@@ -1255,8 +1255,8 @@ export int AValue = MValue;
 
   // A fresh builder should reuse the persistent BMI published by the first one
   // instead of rebuilding its stable cache entry.
-  ModulesManager Manager(CDB);
-  auto AInfo = Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+  ModulesBuilder Builder(CDB);
+  auto AInfo = Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
   ASSERT_TRUE(AInfo);
   HeaderSearchOptions HS(TestDir);
   AInfo->adjustHeaderSearchOptions(HS);
@@ -1265,7 +1265,7 @@ export int AValue = MValue;
   EXPECT_TRUE(StringRef(HS.PrebuiltModuleFiles["M"]).contains("M-"));
 
   ParseInputs AUse = getInputs("A.cppm", CDB);
-  AUse.Modules = &Manager;
+  AUse.ModulesManager = &Builder;
   auto Invocation = buildCompilerInvocation(AUse, DiagConsumer);
   ASSERT_TRUE(Invocation);
   EXPECT_TRUE(AInfo->canReuse(*Invocation, FS.view(TestDir)));
@@ -1285,8 +1285,8 @@ import M;
 export int AValue = MValue;
   )cpp");
 
-  ModulesManager Manager(CDB);
-  auto AInfo = Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+  ModulesBuilder Builder(CDB);
+  auto AInfo = Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
   ASSERT_TRUE(AInfo);
   HeaderSearchOptions HS(TestDir);
   AInfo->adjustHeaderSearchOptions(HS);
@@ -1301,7 +1301,7 @@ export int AValue = MValue;
 
   // Corrupt the handed-out BMI and ensure clangd rebuilds a usable replacement.
   auto NewAInfo =
-      Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+      Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
   ASSERT_TRUE(NewAInfo);
   HeaderSearchOptions NewHS(TestDir);
   NewAInfo->adjustHeaderSearchOptions(NewHS);
@@ -1310,7 +1310,7 @@ export int AValue = MValue;
   EXPECT_TRUE(StringRef(NewHS.PrebuiltModuleFiles["M"]).contains("M-"));
 
   ParseInputs AUse = getInputs("A.cppm", CDB);
-  AUse.Modules = &Manager;
+  AUse.ModulesManager = &Builder;
   auto Invocation = buildCompilerInvocation(AUse, DiagConsumer);
   ASSERT_TRUE(Invocation);
   EXPECT_TRUE(NewAInfo->canReuse(*Invocation, FS.view(TestDir)));
@@ -1329,8 +1329,8 @@ import M;
 export int AValue = MValue;
   )cpp");
 
-  ModulesManager Manager(CDB);
-  auto AInfo = Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+  ModulesBuilder Builder(CDB);
+  auto AInfo = Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
   ASSERT_TRUE(AInfo);
 
   HeaderSearchOptions HS(TestDir);
@@ -1372,8 +1372,8 @@ export int AValue = MValue;
 
   llvm::SmallString<256> OrphanPCMPath;
   {
-    ModulesManager Manager(CDB);
-    auto AInfo = Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+    ModulesBuilder Builder(CDB);
+    auto AInfo = Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
     ASSERT_TRUE(AInfo);
     HeaderSearchOptions HS(TestDir);
     AInfo->adjustHeaderSearchOptions(HS);
@@ -1401,8 +1401,8 @@ export int AValue = MValue;
     ASSERT_FALSE(llvm::sys::fs::setLastAccessAndModificationTime(FD, OldTime));
   }
 
-  ModulesManager Manager(CDB);
-  auto AInfo = Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+  ModulesBuilder Builder(CDB);
+  auto AInfo = Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
   ASSERT_TRUE(AInfo);
   EXPECT_FALSE(llvm::sys::fs::exists(OrphanPCMPath));
 }
@@ -1423,8 +1423,8 @@ export int AValue = MValue;
 
   llvm::SmallString<256> OrphanPCMPath;
   {
-    ModulesManager Manager(CDB);
-    auto AInfo = Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+    ModulesBuilder Builder(CDB);
+    auto AInfo = Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
     ASSERT_TRUE(AInfo);
     HeaderSearchOptions HS(TestDir);
     AInfo->adjustHeaderSearchOptions(HS);
@@ -1442,8 +1442,8 @@ export int AValue = MValue;
     EXPECT_TRUE(llvm::sys::fs::exists(OrphanPCMPath));
   }
 
-  ModulesManager Manager(CDB);
-  auto AInfo = Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+  ModulesBuilder Builder(CDB);
+  auto AInfo = Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
   ASSERT_TRUE(AInfo);
   EXPECT_TRUE(llvm::sys::fs::exists(OrphanPCMPath));
 }
@@ -1464,8 +1464,8 @@ export int AValue = MValue;
 
   llvm::SmallString<256> OldVersionedPCMPath;
   {
-    ModulesManager Manager(CDB);
-    auto AInfo = Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+    ModulesBuilder Builder(CDB);
+    auto AInfo = Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
     ASSERT_TRUE(AInfo);
     HeaderSearchOptions HS(TestDir);
     AInfo->adjustHeaderSearchOptions(HS);
@@ -1485,8 +1485,8 @@ export int AValue = MValue;
     ASSERT_FALSE(llvm::sys::fs::setLastAccessAndModificationTime(FD, OldTime));
   }
 
-  ModulesManager Manager(CDB);
-  auto AInfo = Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+  ModulesBuilder Builder(CDB);
+  auto AInfo = Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
   ASSERT_TRUE(AInfo);
   EXPECT_FALSE(llvm::sys::fs::exists(OldVersionedPCMPath));
 }
@@ -1505,9 +1505,9 @@ import M;
 export int AValue = MValue;
   )cpp");
 
-  auto FirstManager = std::make_unique<ModulesManager>(CDB);
+  auto FirstBuilder = std::make_unique<ModulesBuilder>(CDB);
   auto AInfo =
-      FirstManager->buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+      FirstBuilder->buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
   ASSERT_TRUE(AInfo);
   HeaderSearchOptions HS(TestDir);
   AInfo->adjustHeaderSearchOptions(HS);
@@ -1515,9 +1515,9 @@ export int AValue = MValue;
   llvm::StringRef CopyOnReadPCMPath = HS.PrebuiltModuleFiles["M"];
   ASSERT_TRUE(llvm::sys::fs::exists(CopyOnReadPCMPath));
 
-  ModulesManager SecondManager(CDB);
+  ModulesBuilder SecondBuilder(CDB);
   auto SecondInfo =
-      SecondManager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+      SecondBuilder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
   ASSERT_TRUE(SecondInfo);
   EXPECT_TRUE(llvm::sys::fs::exists(CopyOnReadPCMPath));
 }
@@ -1541,12 +1541,12 @@ import M;
 export int BValue = MValue;
   )cpp");
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
   auto AInfo =
-      Manager.buildPrerequisiteModulesFor(getFullPath("projA/A.cppm"), FS);
+      Builder.buildPrerequisiteModulesFor(getFullPath("projA/A.cppm"), FS);
   auto BInfo =
-      Manager.buildPrerequisiteModulesFor(getFullPath("projB/B.cppm"), FS);
+      Builder.buildPrerequisiteModulesFor(getFullPath("projB/B.cppm"), FS);
   ASSERT_TRUE(AInfo);
   ASSERT_TRUE(BInfo);
 
@@ -1593,10 +1593,10 @@ struct TypeFromHeader {};
 
   CDB.addFile("Use.cpp", UseCpp.code());
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
   auto Inputs = getInputs("Use.cpp", CDB);
-  Inputs.Modules = &Manager;
+  Inputs.ModulesManager = &Builder;
   Inputs.Opts.SkipPreambleBuild = true;
 
   auto CI = buildCompilerInvocation(Inputs, DiagConsumer);
@@ -1633,10 +1633,10 @@ import Dep;
 void use() {}
 )cpp");
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
   auto Inputs = getInputs("Consumer.cpp", CDB);
-  Inputs.Modules = &Manager;
+  Inputs.ModulesManager = &Builder;
   Inputs.Opts.SkipPreambleBuild = true;
 
   auto CI = buildCompilerInvocation(Inputs, DiagConsumer);
@@ -1675,7 +1675,7 @@ void use() {}
                                     getFullPath("Consumer.cpp"), *NewCI));
 
   std::unique_ptr<PrerequisiteModules> NewModules =
-      Manager.buildPrerequisiteModulesFor(getFullPath("Consumer.cpp"), FS);
+      Builder.buildPrerequisiteModulesFor(getFullPath("Consumer.cpp"), FS);
   ASSERT_TRUE(NewModules);
   HeaderSearchOptions HSOpts;
   NewModules->adjustHeaderSearchOptions(HSOpts);
@@ -1701,10 +1701,10 @@ export struct TypeFromModule {};
 
   CDB.addFile("Use.cpp", UseCpp.code());
 
-  ModulesManager Manager(CDB);
+  ModulesBuilder Builder(CDB);
 
   auto Inputs = getInputs("Use.cpp", CDB);
-  Inputs.Modules = &Manager;
+  Inputs.ModulesManager = &Builder;
   Inputs.Opts.SkipPreambleBuild = true;
 
   auto CI = buildCompilerInvocation(Inputs, DiagConsumer);

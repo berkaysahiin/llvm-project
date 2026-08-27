@@ -14,7 +14,7 @@
 #include "Feature.h"
 #include "GlobalCompilationDatabase.h"
 #include "LSPBinder.h"
-#include "ModulesManager.h"
+#include "ModulesBuilder.h"
 #include "Protocol.h"
 #include "SemanticHighlighting.h"
 #include "SourceCode.h"
@@ -566,8 +566,8 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
               std::move(Mangler));
 
   if (Opts.EnableExperimentalModulesSupport) {
-    Modules.emplace(*CDB);
-    Opts.Modules = &*Modules;
+    ModulesManager.emplace(*CDB);
+    Opts.ModulesManager = &*ModulesManager;
   }
 
   {

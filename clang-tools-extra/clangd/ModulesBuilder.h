@@ -1,4 +1,4 @@
-//===----------------- ModulesManager.h --------------------------*- C++-*-===//
+//===----------------- ModulesBuilder.h --------------------------*- C++-*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -8,10 +8,17 @@
 //
 // Experimental support for C++20 Modules.
 //
+// Currently we simplify the implementations by preventing reusing module files
+// across different versions and different source files. But this is clearly a
+// waste of time and space in the end of the day.
+//
+// TODO: Supporting reusing module files across different versions and
+// different source files.
+//
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_MODULES_MANAGER_H
-#define LLVM_CLANG_TOOLS_EXTRA_CLANGD_MODULES_MANAGER_H
+#ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_MODULES_BUILDER_H
+#define LLVM_CLANG_TOOLS_EXTRA_CLANGD_MODULES_BUILDER_H
 
 #include "GlobalCompilationDatabase.h"
 #include "ProjectModules.h"
@@ -46,7 +53,7 @@ namespace clangd {
 /// won't be stored. Since it is not needed to parse `c.cppm`.
 ///
 /// Users should only get PrerequisiteModules from
-/// `ModulesManager::buildPrerequisiteModulesFor(...)`.
+/// `ModulesBuilder::buildPrerequisiteModulesFor(...)`.
 ///
 /// Users can detect whether the PrerequisiteModules is still up to date by
 /// calling the `canReuse()` member function.
@@ -55,7 +62,7 @@ namespace clangd {
 /// compilation commands to select the built module files first. Before calling
 /// `adjustHeaderSearchOptions()`, users should call `canReuse()` first to check
 /// if all the stored module files are valid. In case they are not valid,
-/// users should call `ModulesManager::buildPrerequisiteModulesFor(...)` again
+/// users should call `ModulesBuilder::buildPrerequisiteModulesFor(...)` again
 /// to get the new PrerequisiteModules.
 class PrerequisiteModules {
 public:
@@ -76,18 +83,20 @@ public:
   virtual ~PrerequisiteModules() = default;
 };
 
-/// Manages the module files needed to parse source files, including building
-/// prerequisite modules and reusing cached module files where possible.
-class ModulesManager {
+/// This class handles building module files for a given source file.
+///
+/// In the future, we want the class to manage the module files acorss
+/// different versions and different source files.
+class ModulesBuilder {
 public:
-  ModulesManager(const GlobalCompilationDatabase &CDB);
-  ~ModulesManager();
+  ModulesBuilder(const GlobalCompilationDatabase &CDB);
+  ~ModulesBuilder();
 
-  ModulesManager(const ModulesManager &) = delete;
-  ModulesManager(ModulesManager &&) = delete;
+  ModulesBuilder(const ModulesBuilder &) = delete;
+  ModulesBuilder(ModulesBuilder &&) = delete;
 
-  ModulesManager &operator=(const ModulesManager &) = delete;
-  ModulesManager &operator=(ModulesManager &&) = delete;
+  ModulesBuilder &operator=(const ModulesBuilder &) = delete;
+  ModulesBuilder &operator=(ModulesBuilder &&) = delete;
 
   std::unique_ptr<PrerequisiteModules>
   buildPrerequisiteModulesFor(PathRef File, const ThreadsafeFS &TFS);
@@ -98,8 +107,8 @@ public:
   std::vector<std::string> getRequiredModuleNames(PathRef File);
 
 private:
-  class ModulesManagerImpl;
-  std::unique_ptr<ModulesManagerImpl> Impl;
+  class ModulesBuilderImpl;
+  std::unique_ptr<ModulesBuilderImpl> Impl;
 };
 
 } // namespace clangd
