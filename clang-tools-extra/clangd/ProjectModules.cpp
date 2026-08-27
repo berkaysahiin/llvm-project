@@ -571,7 +571,7 @@ public:
 
   std::string getSourceForModuleName(llvm::StringRef ModuleName,
                                      PathRef RequiredSource) {
-    ProjectModules::ModuleNameState State = getModuleNameState(ModuleName);
+    const ProjectModules::ModuleNameState State = getModuleNameState(ModuleName);
     if (State == ProjectModules::ModuleNameState::Multiple) {
       std::string Cached = Cache.getMultiple(ModuleName, RequiredSource);
       if (!Cached.empty()) {

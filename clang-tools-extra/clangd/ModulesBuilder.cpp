@@ -925,10 +925,10 @@ private:
   };
 
   std::shared_ptr<ProjectEntry> projectFor(PathRef File) {
-    std::string Key = projectKey(getCDB().getProjectInfo(File), File);
+    const std::string Key = projectKey(getCDB().getProjectInfo(File), File);
 
     std::lock_guard<std::mutex> Lock(ProjectsMutex);
-    auto It = Projects.find(Key);
+    const auto It = Projects.find(Key);
     if (It != Projects.end())
       return It->second;
 
