@@ -175,7 +175,7 @@ public:
   MockDirectoryCompilationDatabase(StringRef TestDir, const ThreadsafeFS &TFS)
       : MockCompilationDatabase(TestDir),
         MockedCDBPtr(std::make_shared<MockClangCompilationDatabase>(*this)),
-        TFS(TFS), GlobalScanningCount(0) {
+        TFS(TFS), GlobalScanningCount(0), ProjectModulesCount(0) {
     this->ExtraClangFlags.push_back("-std=c++20");
     this->ExtraClangFlags.push_back("-c");
   }
@@ -183,12 +183,14 @@ public:
   void addFile(llvm::StringRef Path, llvm::StringRef Contents);
 
   std::unique_ptr<ProjectModules> getProjectModules(PathRef) const override {
+    ++ProjectModulesCount;
     return std::make_unique<GlobalScanningCounterProjectModules>(
         clang::clangd::getProjectModules(MockedCDBPtr, TFS),
         GlobalScanningCount);
   }
 
   unsigned getGlobalScanningCount() const { return GlobalScanningCount; }
+  unsigned getProjectModulesCount() const { return ProjectModulesCount; }
 
 private:
   class MockClangCompilationDatabase : public tooling::CompilationDatabase {
@@ -217,6 +219,7 @@ private:
   const ThreadsafeFS &TFS;
 
   mutable std::atomic<unsigned> GlobalScanningCount;
+  mutable std::atomic<unsigned> ProjectModulesCount;
 };
 
 // Add files to the working testing directory and the compilation database.
@@ -803,6 +806,7 @@ import M;
   Manager.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
   Manager.buildPrerequisiteModulesFor(getFullPath("B.cppm"), FS);
   EXPECT_EQ(CDB.getGlobalScanningCount(), 1u);
+  EXPECT_EQ(CDB.getProjectModulesCount(), 1u);
 }
 
 // Test that canReuse detects changes to headers included in module units.
@@ -1669,6 +1673,13 @@ void use() {}
 
   EXPECT_FALSE(isPreambleCompatible(*Preamble, Inputs,
                                     getFullPath("Consumer.cpp"), *NewCI));
+
+  std::unique_ptr<PrerequisiteModules> NewModules =
+      Manager.buildPrerequisiteModulesFor(getFullPath("Consumer.cpp"), FS);
+  ASSERT_TRUE(NewModules);
+  HeaderSearchOptions HSOpts;
+  NewModules->adjustHeaderSearchOptions(HSOpts);
+  EXPECT_TRUE(HSOpts.PrebuiltModuleFiles.count("NewDep"));
 }
 
 TEST_F(PrerequisiteModulesTests, ModuleSemanticHighlighting) {

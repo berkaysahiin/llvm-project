@@ -16,6 +16,7 @@
 #include "clang/Serialization/ModuleCache.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
@@ -72,6 +73,15 @@ std::string normalizePathForCache(PathRef Path) {
   llvm::SmallString<256> Normalized(Path);
   llvm::sys::path::remove_dots(Normalized, /*remove_dot_dot=*/true);
   return maybeCaseFoldPath(Normalized);
+}
+
+std::string projectKey(const std::optional<ProjectInfo> &Project,
+                       PathRef File) {
+  Path Identity = File.str();
+  if (Project && !Project->SourceRoot.empty())
+    Identity = Project->SourceRoot;
+
+  return normalizePathForCache(Identity);
 }
 
 /// Returns the root directory used for persistent module cache storage.
@@ -867,28 +877,24 @@ private:
 
 class CachingProjectModules : public ProjectModules {
 public:
-  CachingProjectModules(std::unique_ptr<ProjectModules> MDB,
-                        ModuleNameToSourceCache &Cache)
-      : MDB(std::move(MDB)), Cache(Cache) {
-    assert(this->MDB && "CachingProjectModules should only be created with a "
-                        "valid underlying ProjectModules");
-  }
+  CachingProjectModules(ProjectModules &MDB, ModuleNameToSourceCache &Cache)
+      : MDB(MDB), Cache(Cache) {}
 
   std::vector<std::string> getRequiredModules(PathRef File) override {
-    return MDB->getRequiredModules(File);
+    return MDB.getRequiredModules(File);
   }
 
   std::string getModuleNameForSource(PathRef File) override {
-    return MDB->getModuleNameForSource(File);
+    return MDB.getModuleNameForSource(File);
   }
 
   ModuleNameState getModuleNameState(llvm::StringRef ModuleName) override {
-    return MDB->getModuleNameState(ModuleName);
+    return MDB.getModuleNameState(ModuleName);
   }
 
   std::string getSourceForModuleName(llvm::StringRef ModuleName,
                                      PathRef RequiredSrcFile) override {
-    auto ModuleState = MDB->getModuleNameState(ModuleName);
+    ModuleNameState ModuleState = MDB.getModuleNameState(ModuleName);
 
     if (ModuleState == ModuleNameState::Multiple) {
       std::string CachedResult =
@@ -898,7 +904,7 @@ public:
       // as we query.
       if (!CachedResult.empty()) {
         std::string ModuleNameOfCachedSource =
-            MDB->getModuleNameForSource(CachedResult);
+            MDB.getModuleNameForSource(CachedResult);
         if (ModuleNameOfCachedSource == ModuleName)
           return CachedResult;
 
@@ -906,7 +912,8 @@ public:
         Cache.eraseMultipleEntry(ModuleName, RequiredSrcFile);
       }
 
-      auto Result = MDB->getSourceForModuleName(ModuleName, RequiredSrcFile);
+      std::string Result =
+          MDB.getSourceForModuleName(ModuleName, RequiredSrcFile);
       if (!Result.empty())
         Cache.addMultipleEntry(ModuleName, RequiredSrcFile, Result);
       return Result;
@@ -922,7 +929,7 @@ public:
     // as we query.
     if (!CachedResult.empty()) {
       std::string ModuleNameOfCachedSource =
-          MDB->getModuleNameForSource(CachedResult);
+          MDB.getModuleNameForSource(CachedResult);
       if (ModuleNameOfCachedSource == ModuleName)
         return CachedResult;
 
@@ -930,7 +937,8 @@ public:
       Cache.eraseUniqueEntry(ModuleName);
     }
 
-    auto Result = MDB->getSourceForModuleName(ModuleName, RequiredSrcFile);
+    std::string Result =
+        MDB.getSourceForModuleName(ModuleName, RequiredSrcFile);
     if (!Result.empty())
       Cache.addUniqueEntry(ModuleName, Result);
 
@@ -938,7 +946,7 @@ public:
   }
 
 private:
-  std::unique_ptr<ProjectModules> MDB;
+  ProjectModules &MDB;
   ModuleNameToSourceCache &Cache;
 };
 
@@ -1023,10 +1031,12 @@ class ModulesManager::ModulesManagerImpl {
 public:
   ModulesManagerImpl(const GlobalCompilationDatabase &CDB) : Cache(CDB) {}
 
-  ModuleNameToSourceCache &getProjectModulesCache() {
-    return ProjectModulesCache;
-  }
-  const GlobalCompilationDatabase &getCDB() const { return Cache.getCDB(); }
+  bool hasRequiredModules(PathRef File);
+
+  std::vector<std::string> getRequiredModuleNames(PathRef File);
+
+  std::unique_ptr<PrerequisiteModules>
+  buildPrerequisiteModulesFor(PathRef File, const ThreadsafeFS &TFS);
 
   llvm::Error
   getOrBuildModuleFile(PathRef RequiredSource, StringRef ModuleName,
@@ -1034,6 +1044,35 @@ public:
                        ReusablePrerequisiteModules &BuiltModuleFiles);
 
 private:
+  struct ProjectEntry {
+    ProjectEntry(std::unique_ptr<ProjectModules> Modules)
+        : Modules(std::move(Modules)) {}
+
+    std::mutex Mutex;
+    std::unique_ptr<ProjectModules> Modules;
+    ModuleNameToSourceCache Cache;
+  };
+
+  std::shared_ptr<ProjectEntry> projectFor(PathRef File) {
+    std::string Key = projectKey(getCDB().getProjectInfo(File), File);
+
+    std::lock_guard<std::mutex> Lock(ProjectsMutex);
+    auto It = Projects.find(Key);
+    if (It != Projects.end())
+      return It->second;
+
+    std::unique_ptr<ProjectModules> Modules = getCDB().getProjectModules(File);
+    if (!Modules)
+      return nullptr;
+
+    std::shared_ptr<ProjectEntry> Project =
+        std::make_shared<ProjectEntry>(std::move(Modules));
+    Projects.try_emplace(Key, Project);
+    return Project;
+  }
+
+  const GlobalCompilationDatabase &getCDB() const { return Cache.getCDB(); }
+
   /// Try to get prebuilt module files from the compilation database.
   void getPrebuiltModuleFile(StringRef ModuleName, PathRef ModuleUnitFileName,
                              const ThreadsafeFS &TFS,
@@ -1043,7 +1082,8 @@ private:
   void garbageCollectModuleCacheForProjectRoot(PathRef ProjectRoot);
 
   ModuleFileCache Cache;
-  ModuleNameToSourceCache ProjectModulesCache;
+  std::mutex ProjectsMutex;
+  llvm::StringMap<std::shared_ptr<ProjectEntry>> Projects;
   std::mutex GarbageCollectedProjectRootsMutex;
   llvm::StringSet<> GarbageCollectedProjectRoots;
 };
@@ -1231,36 +1271,38 @@ llvm::Error ModulesManager::ModulesManagerImpl::getOrBuildModuleFile(
   return llvm::Error::success();
 }
 
-bool ModulesManager::hasRequiredModules(PathRef File) {
-  std::unique_ptr<ProjectModules> MDB = Impl->getCDB().getProjectModules(File);
-  if (!MDB)
+bool ModulesManager::ModulesManagerImpl::hasRequiredModules(PathRef File) {
+  std::shared_ptr<ProjectEntry> Project = projectFor(File);
+  if (!Project)
     return false;
 
-  CachingProjectModules CachedMDB(std::move(MDB),
-                                  Impl->getProjectModulesCache());
+  std::lock_guard<std::mutex> Lock(Project->Mutex);
+  CachingProjectModules CachedMDB(*Project->Modules, Project->Cache);
   return !CachedMDB.getRequiredModules(File).empty();
 }
 
-std::vector<std::string> ModulesManager::getRequiredModuleNames(PathRef File) {
-  std::unique_ptr<ProjectModules> MDB = Impl->getCDB().getProjectModules(File);
-  if (!MDB)
+std::vector<std::string>
+ModulesManager::ModulesManagerImpl::getRequiredModuleNames(PathRef File) {
+  std::shared_ptr<ProjectEntry> Project = projectFor(File);
+  if (!Project)
     return {};
 
-  CachingProjectModules CachedMDB(std::move(MDB),
-                                  Impl->getProjectModulesCache());
+  std::lock_guard<std::mutex> Lock(Project->Mutex);
+  CachingProjectModules CachedMDB(*Project->Modules, Project->Cache);
   return CachedMDB.getRequiredModules(File);
 }
 
 std::unique_ptr<PrerequisiteModules>
-ModulesManager::buildPrerequisiteModulesFor(PathRef File,
-                                            const ThreadsafeFS &TFS) {
-  std::unique_ptr<ProjectModules> MDB = Impl->getCDB().getProjectModules(File);
-  if (!MDB) {
+ModulesManager::ModulesManagerImpl::buildPrerequisiteModulesFor(
+    PathRef File, const ThreadsafeFS &TFS) {
+  std::shared_ptr<ProjectEntry> Project = projectFor(File);
+  if (!Project) {
     elog("Failed to get Project Modules information for {0}", File);
     return std::make_unique<FailedPrerequisiteModules>();
   }
-  CachingProjectModules CachedMDB(std::move(MDB),
-                                  Impl->getProjectModulesCache());
+
+  std::lock_guard<std::mutex> Lock(Project->Mutex);
+  CachingProjectModules CachedMDB(*Project->Modules, Project->Cache);
 
   std::vector<std::string> RequiredModuleNames =
       CachedMDB.getRequiredModules(File);
@@ -1271,7 +1313,7 @@ ModulesManager::buildPrerequisiteModulesFor(PathRef File,
   RequiredModules->setDirectModuleNames(RequiredModuleNames);
   for (llvm::StringRef RequiredModuleName : RequiredModuleNames) {
     // Return early if there is any error.
-    if (llvm::Error Err = Impl->getOrBuildModuleFile(
+    if (llvm::Error Err = getOrBuildModuleFile(
             File, RequiredModuleName, TFS, CachedMDB, *RequiredModules.get())) {
       elog("Failed to build module {0}; due to {1}", RequiredModuleName,
            toString(std::move(Err)));
@@ -1280,6 +1322,20 @@ ModulesManager::buildPrerequisiteModulesFor(PathRef File,
   }
 
   return std::move(RequiredModules);
+}
+
+bool ModulesManager::hasRequiredModules(PathRef File) {
+  return Impl->hasRequiredModules(File);
+}
+
+std::vector<std::string> ModulesManager::getRequiredModuleNames(PathRef File) {
+  return Impl->getRequiredModuleNames(File);
+}
+
+std::unique_ptr<PrerequisiteModules>
+ModulesManager::buildPrerequisiteModulesFor(PathRef File,
+                                            const ThreadsafeFS &TFS) {
+  return Impl->buildPrerequisiteModulesFor(File, TFS);
 }
 
 ModulesManager::ModulesManager(const GlobalCompilationDatabase &CDB) {

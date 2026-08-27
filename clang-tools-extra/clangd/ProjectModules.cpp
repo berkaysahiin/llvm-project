@@ -152,14 +152,7 @@ public:
   ModuleDependencyScanner(
       std::shared_ptr<const clang::tooling::CompilationDatabase> CDB,
       const ThreadsafeFS &TFS)
-      : CDB(CDB), Service([&TFS] {
-          dependencies::DependencyScanningServiceOptions Opts;
-          Opts.MakeVFS = [&] { return TFS.view(std::nullopt); };
-          Opts.Mode = dependencies::ScanningMode::CanonicalPreprocessing;
-          Opts.EmitWarnings = false;
-          Opts.ReportAbsolutePaths = false;
-          return Opts;
-        }()) {}
+      : CDB(CDB), TFS(TFS) {}
 
   /// The scanned modules dependency information for a specific source file.
   struct ModuleDependencyInfo {
@@ -180,7 +173,13 @@ public:
   /// a global module dependency scanner to monitor every file. Or we
   /// can simply require the build systems (or even the end users)
   /// to provide the map.
-  void globalScan(const ProjectModules::CommandMangler &Mangler);
+  /// Returns whether this call performed the scan.
+  bool globalScan(const ProjectModules::CommandMangler &Mangler);
+
+  void invalidateGlobalScan() {
+    GlobalScanned = false;
+    ModuleNameToSource.clear();
+  }
 
   /// Get the source file from the module name. Note that the language
   /// guarantees all the module names are unique in a valid program.
@@ -197,12 +196,16 @@ public:
                      const ProjectModules::CommandMangler &Mangler);
 
 private:
+  std::unique_ptr<dependencies::DependencyScanningService> scanningService();
+  std::optional<ModuleDependencyInfo>
+  scan(PathRef FilePath, dependencies::DependencyScanningService &Service,
+       const ProjectModules::CommandMangler &Mangler);
+
   std::shared_ptr<const clang::tooling::CompilationDatabase> CDB;
+  const ThreadsafeFS &TFS;
 
   // Whether the scanner has scanned the project globally.
   bool GlobalScanned = false;
-
-  clang::dependencies::DependencyScanningService Service;
 
   // TODO: Add a scanning cache.
 
@@ -212,6 +215,26 @@ private:
 
 std::optional<ModuleDependencyScanner::ModuleDependencyInfo>
 ModuleDependencyScanner::scan(PathRef FilePath,
+                              const ProjectModules::CommandMangler &Mangler) {
+  std::unique_ptr<dependencies::DependencyScanningService> Service =
+      scanningService();
+  return scan(FilePath, *Service, Mangler);
+}
+
+std::unique_ptr<dependencies::DependencyScanningService>
+ModuleDependencyScanner::scanningService() {
+  dependencies::DependencyScanningServiceOptions Opts;
+  Opts.MakeVFS = [this] { return TFS.view(std::nullopt); };
+  Opts.Mode = dependencies::ScanningMode::CanonicalPreprocessing;
+  Opts.EmitWarnings = false;
+  Opts.ReportAbsolutePaths = false;
+  return std::make_unique<dependencies::DependencyScanningService>(
+      std::move(Opts));
+}
+
+std::optional<ModuleDependencyScanner::ModuleDependencyInfo>
+ModuleDependencyScanner::scan(PathRef FilePath,
+                              dependencies::DependencyScanningService &Service,
                               const ProjectModules::CommandMangler &Mangler) {
   auto Cmd = getCompileCommandForFile(*CDB, FilePath, Mangler);
   if (!Cmd)
@@ -263,15 +286,18 @@ ModuleDependencyScanner::scan(PathRef FilePath,
   return Result;
 }
 
-void ModuleDependencyScanner::globalScan(
+bool ModuleDependencyScanner::globalScan(
     const ProjectModules::CommandMangler &Mangler) {
   if (GlobalScanned)
-    return;
+    return false;
 
+  std::unique_ptr<dependencies::DependencyScanningService> Service =
+      scanningService();
   for (auto &File : CDB->getAllFiles())
-    scan(File, Mangler);
+    scan(File, *Service, Mangler);
 
   GlobalScanned = true;
+  return true;
 }
 
 PathRef ModuleDependencyScanner::getSourceForModuleName(
@@ -325,6 +351,19 @@ public:
   /// ModuleDependencyScanner for detail.
   std::string getSourceForModuleName(llvm::StringRef ModuleName,
                                      PathRef RequiredSourceFile) override {
+    bool Scanned = Scanner.globalScan(Mangler);
+    PathRef Source = Scanner.getSourceForModuleName(ModuleName);
+    if (!Source.empty()) {
+      std::optional<ModuleDependencyScanner::ModuleDependencyInfo>
+          ScanningResult = Scanner.scan(Source, Mangler);
+      if (ScanningResult && ScanningResult->ModuleName == ModuleName)
+        return Source.str();
+    }
+
+    if (Scanned)
+      return {};
+
+    Scanner.invalidateGlobalScan();
     Scanner.globalScan(Mangler);
     return Scanner.getSourceForModuleName(ModuleName).str();
   }
