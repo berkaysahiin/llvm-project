@@ -15,6 +15,7 @@
 #include "clang/Tooling/CompilationDatabase.h"
 
 #include <memory>
+#include <optional>
 
 namespace clang {
 namespace clangd {
@@ -55,9 +56,9 @@ public:
   ProjectModules &operator=(const ProjectModules &) = delete;
 
   std::vector<std::string> getRequiredModules(PathRef File);
-  std::string getModuleNameForSource(PathRef File);
-  std::string getSourceForModuleName(llvm::StringRef ModuleName,
-                                     PathRef RequiredSrcFile);
+  std::optional<std::string> getModuleNameForSource(PathRef File);
+  std::optional<std::string> getSourceForModuleName(llvm::StringRef ModuleName,
+                                                    PathRef RequiredSrcFile);
   ModuleNameState getModuleNameState(llvm::StringRef ModuleName);
 
   void setCommandMangler(CommandMangler Mangler);

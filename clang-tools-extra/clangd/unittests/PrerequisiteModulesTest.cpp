@@ -784,14 +784,15 @@ TEST_F(PrerequisiteModulesTests, ProjectModulesCacheRejectsStaleSource) {
 
   auto Modules = CDB.getProjectModules(getFullPath("Use.cpp"));
   ASSERT_TRUE(Modules);
-  std::string Source =
-      Modules->getSourceForModuleName("M", getFullPath("Use.cpp"));
-  EXPECT_EQ(llvm::sys::path::filename(Source), "M.cppm");
+  auto Source = Modules->getSourceForModuleName("M", getFullPath("Use.cpp"));
+  ASSERT_TRUE(Source);
+  EXPECT_EQ(llvm::sys::path::filename(*Source), "M.cppm");
 
   CDB.addFile("M.cppm", "export module N;");
   CDB.addFile("Replacement.cppm", "export module M;");
   Source = Modules->getSourceForModuleName("M", getFullPath("Use.cpp"));
-  EXPECT_EQ(llvm::sys::path::filename(Source), "Replacement.cppm");
+  ASSERT_TRUE(Source);
+  EXPECT_EQ(llvm::sys::path::filename(*Source), "Replacement.cppm");
 }
 
 // Test that canReuse detects changes to headers included in module units.

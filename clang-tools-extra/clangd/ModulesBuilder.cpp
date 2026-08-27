@@ -27,6 +27,7 @@
 
 #include <chrono>
 #include <ctime>
+#include <optional>
 
 namespace clang {
 namespace clangd {
@@ -827,10 +828,11 @@ llvm::SmallVector<std::string> getAllRequiredModules(PathRef RequiredSource,
   auto VisitDeps = [&](StringRef ModuleName, auto Visitor) -> void {
     ModuleNamesSet.insert(ModuleName);
 
-    for (StringRef RequiredModuleName : MDB.getRequiredModules(
-             MDB.getSourceForModuleName(ModuleName, RequiredSource)))
-      if (ModuleNamesSet.insert(RequiredModuleName).second)
-        Visitor(RequiredModuleName, Visitor);
+    if (auto Source = MDB.getSourceForModuleName(ModuleName, RequiredSource)) {
+      for (StringRef RequiredModuleName : MDB.getRequiredModules(*Source))
+        if (ModuleNamesSet.insert(RequiredModuleName).second)
+          Visitor(RequiredModuleName, Visitor);
+    }
 
     ModuleNames.push_back(ModuleName.str());
   };
@@ -1034,7 +1036,7 @@ llvm::Error ModulesBuilder::ModulesBuilderImpl::getOrBuildModuleFile(
   if (BuiltModuleFiles.isModuleUnitBuilt(ModuleName))
     return llvm::Error::success();
 
-  std::string ModuleUnitFileName =
+  std::optional<std::string> ModuleUnitFile =
       MDB.getSourceForModuleName(ModuleName, RequiredSource);
   /// It is possible that we're meeting third party modules (modules whose
   /// source are not in the project. e.g, the std module may be a third-party
@@ -1043,9 +1045,10 @@ llvm::Error ModulesBuilder::ModulesBuilderImpl::getOrBuildModuleFile(
   /// FIXME: How should we treat third party modules here? If we want to ignore
   /// third party modules, we should return true instead of false here.
   /// Currently we simply bail out.
-  if (ModuleUnitFileName.empty())
+  if (!ModuleUnitFile)
     return llvm::createStringError(
         llvm::formatv("Don't get the module unit for module {0}", ModuleName));
+  const std::string &ModuleUnitFileName = *ModuleUnitFile;
 
   /// Try to get prebuilt module files from the compilation database first. This
   /// helps to avoid building the module files that are already built by the
@@ -1058,8 +1061,12 @@ llvm::Error ModulesBuilder::ModulesBuilderImpl::getOrBuildModuleFile(
     if (BuiltModuleFiles.isModuleUnitBuilt(ReqModuleName))
       continue;
 
-    std::string ReqFileName =
+    std::optional<std::string> ReqFile =
         MDB.getSourceForModuleName(ReqModuleName, RequiredSource);
+    if (!ReqFile)
+      return llvm::createStringError(llvm::formatv(
+          "Don't get the module unit for module {0}", ReqModuleName));
+    const std::string &ReqFileName = *ReqFile;
     auto Cmd = getCDB().getCompileCommand(ReqFileName);
     if (!Cmd)
       return llvm::createStringError(
