@@ -1,4 +1,4 @@
-//===----------------- ModulesBuilder.cpp ------------------------*- C++-*-===//
+//===----------------- ModulesManager.cpp ------------------------*- C++-*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "ModulesBuilder.h"
+#include "ModulesManager.h"
 #include "Compiler.h"
 #include "SourceCode.h"
 #include "support/Logger.h"
@@ -1019,9 +1019,9 @@ void garbageCollectModuleCache(PathRef CacheRoot) {
 
 } // namespace
 
-class ModulesBuilder::ModulesBuilderImpl {
+class ModulesManager::ModulesManagerImpl {
 public:
-  ModulesBuilderImpl(const GlobalCompilationDatabase &CDB) : Cache(CDB) {}
+  ModulesManagerImpl(const GlobalCompilationDatabase &CDB) : Cache(CDB) {}
 
   ModuleNameToSourceCache &getProjectModulesCache() {
     return ProjectModulesCache;
@@ -1048,7 +1048,7 @@ private:
   llvm::StringSet<> GarbageCollectedProjectRoots;
 };
 
-void ModulesBuilder::ModulesBuilderImpl::
+void ModulesManager::ModulesManagerImpl::
     garbageCollectModuleCacheForProjectRoot(PathRef ProjectRoot) {
   if (ProjectRoot.empty())
     return;
@@ -1072,7 +1072,7 @@ void ModulesBuilder::ModulesBuilderImpl::
       CacheRoot);
 }
 
-void ModulesBuilder::ModulesBuilderImpl::getPrebuiltModuleFile(
+void ModulesManager::ModulesManagerImpl::getPrebuiltModuleFile(
     StringRef ModuleName, PathRef ModuleUnitFileName, const ThreadsafeFS &TFS,
     ReusablePrerequisiteModules &BuiltModuleFiles) {
   auto Cmd = getCDB().getCompileCommand(ModuleUnitFileName);
@@ -1116,7 +1116,7 @@ void ModulesBuilder::ModulesBuilderImpl::getPrebuiltModuleFile(
   }
 }
 
-llvm::Error ModulesBuilder::ModulesBuilderImpl::getOrBuildModuleFile(
+llvm::Error ModulesManager::ModulesManagerImpl::getOrBuildModuleFile(
     PathRef RequiredSource, StringRef ModuleName, const ThreadsafeFS &TFS,
     CachingProjectModules &MDB, ReusablePrerequisiteModules &BuiltModuleFiles) {
   if (BuiltModuleFiles.isModuleUnitBuilt(ModuleName))
@@ -1231,7 +1231,7 @@ llvm::Error ModulesBuilder::ModulesBuilderImpl::getOrBuildModuleFile(
   return llvm::Error::success();
 }
 
-bool ModulesBuilder::hasRequiredModules(PathRef File) {
+bool ModulesManager::hasRequiredModules(PathRef File) {
   std::unique_ptr<ProjectModules> MDB = Impl->getCDB().getProjectModules(File);
   if (!MDB)
     return false;
@@ -1241,7 +1241,7 @@ bool ModulesBuilder::hasRequiredModules(PathRef File) {
   return !CachedMDB.getRequiredModules(File).empty();
 }
 
-std::vector<std::string> ModulesBuilder::getRequiredModuleNames(PathRef File) {
+std::vector<std::string> ModulesManager::getRequiredModuleNames(PathRef File) {
   std::unique_ptr<ProjectModules> MDB = Impl->getCDB().getProjectModules(File);
   if (!MDB)
     return {};
@@ -1252,7 +1252,7 @@ std::vector<std::string> ModulesBuilder::getRequiredModuleNames(PathRef File) {
 }
 
 std::unique_ptr<PrerequisiteModules>
-ModulesBuilder::buildPrerequisiteModulesFor(PathRef File,
+ModulesManager::buildPrerequisiteModulesFor(PathRef File,
                                             const ThreadsafeFS &TFS) {
   std::unique_ptr<ProjectModules> MDB = Impl->getCDB().getProjectModules(File);
   if (!MDB) {
@@ -1282,11 +1282,11 @@ ModulesBuilder::buildPrerequisiteModulesFor(PathRef File,
   return std::move(RequiredModules);
 }
 
-ModulesBuilder::ModulesBuilder(const GlobalCompilationDatabase &CDB) {
-  Impl = std::make_unique<ModulesBuilderImpl>(CDB);
+ModulesManager::ModulesManager(const GlobalCompilationDatabase &CDB) {
+  Impl = std::make_unique<ModulesManagerImpl>(CDB);
 }
 
-ModulesBuilder::~ModulesBuilder() {}
+ModulesManager::~ModulesManager() {}
 
 } // namespace clangd
 } // namespace clang

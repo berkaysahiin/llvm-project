@@ -218,8 +218,7 @@ ClangdServer::ClangdServer(const GlobalCompilationDatabase &CDB,
       DynamicIdx(Opts.BuildDynamicSymbolIndex
                      ? new FileIndex(Opts.EnableOutgoingCalls)
                      : nullptr),
-      ModulesManager(Opts.ModulesManager),
-      ClangTidyProvider(Opts.ClangTidyProvider),
+      Modules(Opts.Modules), ClangTidyProvider(Opts.ClangTidyProvider),
       UseDirtyHeaders(Opts.UseDirtyHeaders),
       LineFoldingOnly(Opts.LineFoldingOnly),
       PreambleParseForwardingFunctions(Opts.PreambleParseForwardingFunctions),
@@ -314,7 +313,7 @@ void ClangdServer::addDocument(PathRef File, llvm::StringRef Contents,
   Inputs.Index = Index;
   Inputs.ClangTidyProvider = ClangTidyProvider;
   Inputs.FeatureModules = FeatureModules;
-  Inputs.ModulesManager = ModulesManager;
+  Inputs.Modules = Modules;
   adjustParseInputs(Inputs, File);
   bool NewFile = WorkScheduler->update(File, Inputs, WantDiags);
   // If we loaded Foo.h, we want to make sure Foo.cpp is indexed.
@@ -1200,7 +1199,7 @@ void ClangdServer::adjustParseInputs(ParseInputs &Inputs, PathRef File) const {
   // diagnostics, crashes) due to instability of such scenario support in the
   // clang.
   auto HasRequiredModules = [this, File]() {
-    if (!ModulesManager)
+    if (!Modules)
       return false;
     // Required modules check uses compile commands extracted from the
     // compilation database.
@@ -1208,7 +1207,7 @@ void ClangdServer::adjustParseInputs(ParseInputs &Inputs, PathRef File) const {
     // command adjustments from the config.
     WithContext Ctx(ContextProvider ? ContextProvider(File)
                                     : Context::current().clone());
-    return ModulesManager->hasRequiredModules(File);
+    return Modules->hasRequiredModules(File);
   };
   Inputs.Opts.SkipPreambleBuild = SkipPreambleBuild || HasRequiredModules();
 }

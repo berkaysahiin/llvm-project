@@ -334,8 +334,8 @@ private:
   std::optional<OverlayCDB> CDB;
   // The ClangdServer is created by the "initialize" LSP method.
   std::optional<ClangdServer> Server;
-  // Manages to build module files.
-  std::optional<ModulesBuilder> ModulesManager;
+  // Manages module files.
+  std::optional<ModulesManager> Modules;
 };
 } // namespace clangd
 } // namespace clang

@@ -673,12 +673,11 @@ buildPreamble(PathRef FileName, CompilerInvocation CI,
     Result->Pragmas = std::make_shared<const include_cleaner::PragmaIncludes>(
         CapturedInfo.takePragmaIncludes());
 
-    if (Inputs.ModulesManager) {
+    if (Inputs.Modules) {
       WallTimer PrerequisiteModuleTimer;
       PrerequisiteModuleTimer.startTimer();
       Result->RequiredModules =
-          Inputs.ModulesManager->buildPrerequisiteModulesFor(FileName,
-                                                             *Inputs.TFS);
+          Inputs.Modules->buildPrerequisiteModulesFor(FileName, *Inputs.TFS);
       PrerequisiteModuleTimer.stopTimer();
 
       log("Built prerequisite modules for file {0} in {1} seconds", FileName,
@@ -734,9 +733,9 @@ bool isPreambleCompatible(const PreambleData &Preamble,
   // built module files are still up-to-date, but it cannot detect when a new
   // import has been introduced.
   auto RequiredModulesMatch = [&]() -> bool {
-    if (!Inputs.ModulesManager || !Preamble.RequiredModules)
+    if (!Inputs.Modules || !Preamble.RequiredModules)
       return true;
-    auto NewNames = Inputs.ModulesManager->getRequiredModuleNames(FileName);
+    auto NewNames = Inputs.Modules->getRequiredModuleNames(FileName);
     llvm::StringSet<> NewNameSet;
     NewNameSet.insert_range(NewNames);
     return NewNameSet == Preamble.RequiredModules->getRequiredModuleNames();
