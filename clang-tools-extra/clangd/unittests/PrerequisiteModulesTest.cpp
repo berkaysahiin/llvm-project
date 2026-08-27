@@ -191,6 +191,7 @@ public:
 
   unsigned getGlobalScanningCount() const { return GlobalScanningCount; }
   unsigned getProjectModulesCount() const { return ProjectModulesCount; }
+  void broadcastCommandChanged() { OnCommandChanged.broadcast({}); }
 
 private:
   class MockClangCompilationDatabase : public tooling::CompilationDatabase {
@@ -807,6 +808,11 @@ import M;
   Builder.buildPrerequisiteModulesFor(getFullPath("B.cppm"), FS);
   EXPECT_EQ(CDB.getGlobalScanningCount(), 1u);
   EXPECT_EQ(CDB.getProjectModulesCount(), 1u);
+
+  CDB.broadcastCommandChanged();
+  Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
+  EXPECT_EQ(CDB.getGlobalScanningCount(), 2u);
+  EXPECT_EQ(CDB.getProjectModulesCount(), 2u);
 }
 
 // Test that canReuse detects changes to headers included in module units.

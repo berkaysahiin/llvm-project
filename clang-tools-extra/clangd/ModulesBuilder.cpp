@@ -14,6 +14,7 @@
 #include "clang/Frontend/FrontendActions.h"
 #include "clang/Serialization/ASTReader.h"
 #include "clang/Serialization/ModuleCache.h"
+#include "llvm/ADT/STLForwardCompat.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
@@ -1029,7 +1030,9 @@ void garbageCollectModuleCache(PathRef CacheRoot) {
 
 class ModulesBuilder::ModulesBuilderImpl {
 public:
-  ModulesBuilderImpl(const GlobalCompilationDatabase &CDB) : Cache(CDB) {}
+  ModulesBuilderImpl(const GlobalCompilationDatabase &CDB)
+      : Cache(CDB), CDBWatch(CDB.watch(llvm::bind_front(
+                        &ModulesBuilderImpl::invalidateProjects, this))) {}
 
   bool hasRequiredModules(PathRef File);
 
@@ -1044,6 +1047,11 @@ public:
                        ReusablePrerequisiteModules &BuiltModuleFiles);
 
 private:
+  void invalidateProjects(const std::vector<std::string> &) {
+    std::lock_guard<std::mutex> Lock(ProjectsMutex);
+    Projects.clear();
+  }
+
   struct ProjectEntry {
     ProjectEntry(std::unique_ptr<ProjectModules> Modules)
         : Modules(std::move(Modules)) {}
@@ -1086,6 +1094,7 @@ private:
   llvm::StringMap<std::shared_ptr<ProjectEntry>> Projects;
   std::mutex GarbageCollectedProjectRootsMutex;
   llvm::StringSet<> GarbageCollectedProjectRoots;
+  GlobalCompilationDatabase::CommandChanged::Subscription CDBWatch;
 };
 
 void ModulesBuilder::ModulesBuilderImpl::
