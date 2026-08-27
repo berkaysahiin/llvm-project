@@ -39,39 +39,6 @@ namespace {
 
 MATCHER_P(named, Name, "") { return arg.Name == Name; }
 
-class GlobalScanningCounterProjectModules : public ProjectModules {
-public:
-  GlobalScanningCounterProjectModules(
-      std::unique_ptr<ProjectModules> Underlying, std::atomic<unsigned> &Count)
-      : Underlying(std::move(Underlying)), Count(Count) {}
-
-  std::vector<std::string> getRequiredModules(PathRef File) override {
-    return Underlying->getRequiredModules(File);
-  }
-
-  std::string getModuleNameForSource(PathRef File) override {
-    return Underlying->getModuleNameForSource(File);
-  }
-
-  void setCommandMangler(CommandMangler Mangler) override {
-    Underlying->setCommandMangler(std::move(Mangler));
-  }
-
-  std::string getSourceForModuleName(llvm::StringRef ModuleName,
-                                     PathRef RequiredSrcFile) override {
-    Count++;
-    return Underlying->getSourceForModuleName(ModuleName, RequiredSrcFile);
-  }
-
-  ModuleNameState getModuleNameState(llvm::StringRef ModuleName) override {
-    return Underlying->getModuleNameState(ModuleName);
-  }
-
-private:
-  std::unique_ptr<ProjectModules> Underlying;
-  std::atomic<unsigned> &Count;
-};
-
 class PerFileModulesCompilationDatabase : public GlobalCompilationDatabase {
 public:
   PerFileModulesCompilationDatabase(StringRef TestDir, const ThreadsafeFS &TFS)
@@ -126,7 +93,7 @@ public:
   }
 
   std::unique_ptr<ProjectModules> getProjectModules(PathRef) const override {
-    return clang::clangd::getProjectModules(ToolingCDB, TFS);
+    return std::make_unique<ProjectModules>(ToolingCDB, TFS);
   }
 
 private:
@@ -175,7 +142,7 @@ public:
   MockDirectoryCompilationDatabase(StringRef TestDir, const ThreadsafeFS &TFS)
       : MockCompilationDatabase(TestDir),
         MockedCDBPtr(std::make_shared<MockClangCompilationDatabase>(*this)),
-        TFS(TFS), GlobalScanningCount(0), ProjectModulesCount(0) {
+        TFS(TFS), ProjectModulesCount(0) {
     this->ExtraClangFlags.push_back("-std=c++20");
     this->ExtraClangFlags.push_back("-c");
   }
@@ -184,12 +151,9 @@ public:
 
   std::unique_ptr<ProjectModules> getProjectModules(PathRef) const override {
     ++ProjectModulesCount;
-    return std::make_unique<GlobalScanningCounterProjectModules>(
-        clang::clangd::getProjectModules(MockedCDBPtr, TFS),
-        GlobalScanningCount);
+    return std::make_unique<ProjectModules>(MockedCDBPtr, TFS);
   }
 
-  unsigned getGlobalScanningCount() const { return GlobalScanningCount; }
   unsigned getProjectModulesCount() const { return ProjectModulesCount; }
   void broadcastCommandChanged() { OnCommandChanged.broadcast({}); }
 
@@ -219,7 +183,6 @@ private:
   std::shared_ptr<MockClangCompilationDatabase> MockedCDBPtr;
   const ThreadsafeFS &TFS;
 
-  mutable std::atomic<unsigned> GlobalScanningCount;
   mutable std::atomic<unsigned> ProjectModulesCount;
 };
 
@@ -787,7 +750,7 @@ export constexpr int M = 43;
   EXPECT_TRUE(NewBInfo->canReuse(*BInvocation, FS.view(TestDir)));
 }
 
-TEST_F(PrerequisiteModulesTests, ScanningCacheTest) {
+TEST_F(PrerequisiteModulesTests, ProjectModulesLifetimeTest) {
   MockDirectoryCompilationDatabase CDB(TestDir, FS);
 
   CDB.addFile("M.cppm", R"cpp(
@@ -806,13 +769,29 @@ import M;
 
   Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
   Builder.buildPrerequisiteModulesFor(getFullPath("B.cppm"), FS);
-  EXPECT_EQ(CDB.getGlobalScanningCount(), 1u);
   EXPECT_EQ(CDB.getProjectModulesCount(), 1u);
 
   CDB.broadcastCommandChanged();
   Builder.buildPrerequisiteModulesFor(getFullPath("A.cppm"), FS);
-  EXPECT_EQ(CDB.getGlobalScanningCount(), 2u);
   EXPECT_EQ(CDB.getProjectModulesCount(), 2u);
+}
+
+TEST_F(PrerequisiteModulesTests, ProjectModulesCacheRejectsStaleSource) {
+  MockDirectoryCompilationDatabase CDB(TestDir, FS);
+  CDB.addFile("M.cppm", "export module M;");
+  CDB.addFile("Replacement.cppm", "export module Replacement;");
+  CDB.addFile("Use.cpp", "import M;");
+
+  auto Modules = CDB.getProjectModules(getFullPath("Use.cpp"));
+  ASSERT_TRUE(Modules);
+  std::string Source =
+      Modules->getSourceForModuleName("M", getFullPath("Use.cpp"));
+  EXPECT_EQ(llvm::sys::path::filename(Source), "M.cppm");
+
+  CDB.addFile("M.cppm", "export module N;");
+  CDB.addFile("Replacement.cppm", "export module M;");
+  Source = Modules->getSourceForModuleName("M", getFullPath("Use.cpp"));
+  EXPECT_EQ(llvm::sys::path::filename(Source), "Replacement.cppm");
 }
 
 // Test that canReuse detects changes to headers included in module units.

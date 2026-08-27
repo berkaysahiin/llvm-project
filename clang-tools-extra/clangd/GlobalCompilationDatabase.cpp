@@ -771,7 +771,7 @@ DirectoryBasedGlobalCompilationDatabase::getProjectModules(PathRef File) const {
   if (!Res)
     return {};
 
-  return clang::clangd::getProjectModules(Res->CDB, Opts.TFS);
+  return std::make_unique<ProjectModules>(Res->CDB, Opts.TFS);
 }
 
 OverlayCDB::OverlayCDB(const GlobalCompilationDatabase *Base,

@@ -19,7 +19,7 @@
 namespace clang {
 namespace clangd {
 
-/// An interface to query the modules information in the project.
+/// Provides modules information for a project.
 /// Users should get instances of `ProjectModules` from
 /// `GlobalCompilationDatabase::getProjectModules(PathRef)`.
 ///
@@ -36,7 +36,7 @@ namespace clangd {
 ///
 /// A module name should be in the format:
 /// `<primary-module-name>[:partition-name]`. So module names covers partitions.
-class ProjectModules {
+class ProjectModules final {
 public:
   enum class ModuleNameState {
     Unknown,
@@ -47,23 +47,25 @@ public:
   using CommandMangler =
       llvm::unique_function<void(tooling::CompileCommand &, PathRef) const>;
 
-  virtual std::vector<std::string> getRequiredModules(PathRef File) = 0;
-  virtual std::string getModuleNameForSource(PathRef File) = 0;
-  virtual std::string getSourceForModuleName(llvm::StringRef ModuleName,
-                                             PathRef RequiredSrcFile) = 0;
-  virtual ModuleNameState getModuleNameState(llvm::StringRef ModuleName) {
-    return ModuleNameState::Unknown;
-  }
+  ProjectModules(std::shared_ptr<const clang::tooling::CompilationDatabase> CDB,
+                 const ThreadsafeFS &TFS);
+  ~ProjectModules();
 
-  virtual void setCommandMangler(CommandMangler Mangler) {}
+  ProjectModules(const ProjectModules &) = delete;
+  ProjectModules &operator=(const ProjectModules &) = delete;
 
-  virtual ~ProjectModules() = default;
+  std::vector<std::string> getRequiredModules(PathRef File);
+  std::string getModuleNameForSource(PathRef File);
+  std::string getSourceForModuleName(llvm::StringRef ModuleName,
+                                     PathRef RequiredSrcFile);
+  ModuleNameState getModuleNameState(llvm::StringRef ModuleName);
+
+  void setCommandMangler(CommandMangler Mangler);
+
+private:
+  class Impl;
+  std::unique_ptr<Impl> PImpl;
 };
-
-/// Providing modules information for the project by scanning every file.
-std::unique_ptr<ProjectModules> getProjectModules(
-    std::shared_ptr<const clang::tooling::CompilationDatabase> CDB,
-    const ThreadsafeFS &TFS);
 
 } // namespace clangd
 } // namespace clang

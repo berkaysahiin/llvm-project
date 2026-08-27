@@ -815,147 +815,11 @@ void ModuleFileCache::remove(StringRef ModuleName, PathRef ModuleUnitSource,
   ModuleFiles.erase(cacheKey(ModuleName, ModuleUnitSource, CommandHash));
 }
 
-class ModuleNameToSourceCache {
-public:
-  std::string getUniqueSourceForModuleName(llvm::StringRef ModuleName) {
-    std::lock_guard<std::mutex> Lock(CacheMutex);
-    auto Iter = ModuleNameToUniqueSourceCache.find(ModuleName);
-    if (Iter != ModuleNameToUniqueSourceCache.end())
-      return Iter->second;
-    return "";
-  }
-
-  void addUniqueEntry(llvm::StringRef ModuleName, PathRef Source) {
-    std::lock_guard<std::mutex> Lock(CacheMutex);
-    ModuleNameToUniqueSourceCache[ModuleName] = Source.str();
-  }
-
-  void eraseUniqueEntry(llvm::StringRef ModuleName) {
-    std::lock_guard<std::mutex> Lock(CacheMutex);
-    ModuleNameToUniqueSourceCache.erase(ModuleName);
-  }
-
-  std::string getMultipleSourceForModuleName(llvm::StringRef ModuleName,
-                                             PathRef RequiredSrcFile) {
-    std::lock_guard<std::mutex> Lock(CacheMutex);
-    auto Outer = ModuleNameToMultipleSourceCache.find(ModuleName);
-    if (Outer == ModuleNameToMultipleSourceCache.end())
-      return "";
-    auto Inner = Outer->second.find(maybeCaseFoldPath(RequiredSrcFile));
-    if (Inner == Outer->second.end())
-      return "";
-    return Inner->second;
-  }
-
-  void addMultipleEntry(llvm::StringRef ModuleName, PathRef RequiredSrcFile,
-                        PathRef Source) {
-    std::lock_guard<std::mutex> Lock(CacheMutex);
-    ModuleNameToMultipleSourceCache[ModuleName]
-                                   [maybeCaseFoldPath(RequiredSrcFile)] =
-                                       Source.str();
-  }
-
-  void eraseMultipleEntry(llvm::StringRef ModuleName, PathRef RequiredSrcFile) {
-    std::lock_guard<std::mutex> Lock(CacheMutex);
-    auto Outer = ModuleNameToMultipleSourceCache.find(ModuleName);
-    if (Outer == ModuleNameToMultipleSourceCache.end())
-      return;
-    Outer->second.erase(maybeCaseFoldPath(RequiredSrcFile));
-    if (Outer->second.empty())
-      ModuleNameToMultipleSourceCache.erase(Outer);
-  }
-
-private:
-  std::mutex CacheMutex;
-  llvm::StringMap<std::string> ModuleNameToUniqueSourceCache;
-
-  // Map from module name to a map from required source to module unit source
-  // which declares the corresponding module name.
-  // This looks inefficiency. We can only assume there won't too many duplicated
-  // module names with different module units in a project.
-  llvm::StringMap<llvm::StringMap<std::string>> ModuleNameToMultipleSourceCache;
-};
-
-class CachingProjectModules : public ProjectModules {
-public:
-  CachingProjectModules(ProjectModules &MDB, ModuleNameToSourceCache &Cache)
-      : MDB(MDB), Cache(Cache) {}
-
-  std::vector<std::string> getRequiredModules(PathRef File) override {
-    return MDB.getRequiredModules(File);
-  }
-
-  std::string getModuleNameForSource(PathRef File) override {
-    return MDB.getModuleNameForSource(File);
-  }
-
-  ModuleNameState getModuleNameState(llvm::StringRef ModuleName) override {
-    return MDB.getModuleNameState(ModuleName);
-  }
-
-  std::string getSourceForModuleName(llvm::StringRef ModuleName,
-                                     PathRef RequiredSrcFile) override {
-    ModuleNameState ModuleState = MDB.getModuleNameState(ModuleName);
-
-    if (ModuleState == ModuleNameState::Multiple) {
-      std::string CachedResult =
-          Cache.getMultipleSourceForModuleName(ModuleName, RequiredSrcFile);
-
-      // Verify Cached Result by seeing if the source declaring the same module
-      // as we query.
-      if (!CachedResult.empty()) {
-        std::string ModuleNameOfCachedSource =
-            MDB.getModuleNameForSource(CachedResult);
-        if (ModuleNameOfCachedSource == ModuleName)
-          return CachedResult;
-
-        // Cached Result is invalid. Clear it.
-        Cache.eraseMultipleEntry(ModuleName, RequiredSrcFile);
-      }
-
-      std::string Result =
-          MDB.getSourceForModuleName(ModuleName, RequiredSrcFile);
-      if (!Result.empty())
-        Cache.addMultipleEntry(ModuleName, RequiredSrcFile, Result);
-      return Result;
-    }
-
-    // For unknown module name state, assume it is unique. This may give user
-    // higher usability.
-    assert(ModuleState == ModuleNameState::Unique ||
-           ModuleState == ModuleNameState::Unknown);
-    std::string CachedResult = Cache.getUniqueSourceForModuleName(ModuleName);
-
-    // Verify Cached Result by seeing if the source declaring the same module
-    // as we query.
-    if (!CachedResult.empty()) {
-      std::string ModuleNameOfCachedSource =
-          MDB.getModuleNameForSource(CachedResult);
-      if (ModuleNameOfCachedSource == ModuleName)
-        return CachedResult;
-
-      // Cached Result is invalid. Clear it.
-      Cache.eraseUniqueEntry(ModuleName);
-    }
-
-    std::string Result =
-        MDB.getSourceForModuleName(ModuleName, RequiredSrcFile);
-    if (!Result.empty())
-      Cache.addUniqueEntry(ModuleName, Result);
-
-    return Result;
-  }
-
-private:
-  ProjectModules &MDB;
-  ModuleNameToSourceCache &Cache;
-};
-
 /// Collect the directly and indirectly required module names for \param
 /// ModuleName in topological order. The \param ModuleName is guaranteed to
 /// be the last element in \param ModuleNames.
 llvm::SmallVector<std::string> getAllRequiredModules(PathRef RequiredSource,
-                                                     CachingProjectModules &MDB,
+                                                     ProjectModules &MDB,
                                                      StringRef ModuleName) {
   llvm::SmallVector<std::string> ModuleNames;
   llvm::StringSet<> ModuleNamesSet;
@@ -1043,7 +907,7 @@ public:
 
   llvm::Error
   getOrBuildModuleFile(PathRef RequiredSource, StringRef ModuleName,
-                       const ThreadsafeFS &TFS, CachingProjectModules &MDB,
+                       const ThreadsafeFS &TFS, ProjectModules &MDB,
                        ReusablePrerequisiteModules &BuiltModuleFiles);
 
 private:
@@ -1058,7 +922,6 @@ private:
 
     std::mutex Mutex;
     std::unique_ptr<ProjectModules> Modules;
-    ModuleNameToSourceCache Cache;
   };
 
   std::shared_ptr<ProjectEntry> projectFor(PathRef File) {
@@ -1167,7 +1030,7 @@ void ModulesBuilder::ModulesBuilderImpl::getPrebuiltModuleFile(
 
 llvm::Error ModulesBuilder::ModulesBuilderImpl::getOrBuildModuleFile(
     PathRef RequiredSource, StringRef ModuleName, const ThreadsafeFS &TFS,
-    CachingProjectModules &MDB, ReusablePrerequisiteModules &BuiltModuleFiles) {
+    ProjectModules &MDB, ReusablePrerequisiteModules &BuiltModuleFiles) {
   if (BuiltModuleFiles.isModuleUnitBuilt(ModuleName))
     return llvm::Error::success();
 
@@ -1286,8 +1149,7 @@ bool ModulesBuilder::ModulesBuilderImpl::hasRequiredModules(PathRef File) {
     return false;
 
   std::lock_guard<std::mutex> Lock(Project->Mutex);
-  CachingProjectModules CachedMDB(*Project->Modules, Project->Cache);
-  return !CachedMDB.getRequiredModules(File).empty();
+  return !Project->Modules->getRequiredModules(File).empty();
 }
 
 std::vector<std::string>
@@ -1297,8 +1159,7 @@ ModulesBuilder::ModulesBuilderImpl::getRequiredModuleNames(PathRef File) {
     return {};
 
   std::lock_guard<std::mutex> Lock(Project->Mutex);
-  CachingProjectModules CachedMDB(*Project->Modules, Project->Cache);
-  return CachedMDB.getRequiredModules(File);
+  return Project->Modules->getRequiredModules(File);
 }
 
 std::unique_ptr<PrerequisiteModules>
@@ -1311,10 +1172,8 @@ ModulesBuilder::ModulesBuilderImpl::buildPrerequisiteModulesFor(
   }
 
   std::lock_guard<std::mutex> Lock(Project->Mutex);
-  CachingProjectModules CachedMDB(*Project->Modules, Project->Cache);
-
   std::vector<std::string> RequiredModuleNames =
-      CachedMDB.getRequiredModules(File);
+      Project->Modules->getRequiredModules(File);
   if (RequiredModuleNames.empty())
     return std::make_unique<ReusablePrerequisiteModules>();
 
@@ -1322,8 +1181,9 @@ ModulesBuilder::ModulesBuilderImpl::buildPrerequisiteModulesFor(
   RequiredModules->setDirectModuleNames(RequiredModuleNames);
   for (llvm::StringRef RequiredModuleName : RequiredModuleNames) {
     // Return early if there is any error.
-    if (llvm::Error Err = getOrBuildModuleFile(
-            File, RequiredModuleName, TFS, CachedMDB, *RequiredModules.get())) {
+    if (llvm::Error Err =
+            getOrBuildModuleFile(File, RequiredModuleName, TFS,
+                                 *Project->Modules, *RequiredModules.get())) {
       elog("Failed to build module {0}; due to {1}", RequiredModuleName,
            toString(std::move(Err)));
       return std::make_unique<FailedPrerequisiteModules>();
