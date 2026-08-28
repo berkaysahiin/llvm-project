@@ -39,12 +39,6 @@ namespace clangd {
 /// `<primary-module-name>[:partition-name]`. So module names covers partitions.
 class ProjectModules final {
 public:
-  enum class ModuleNameState {
-    Unknown,
-    Unique,
-    Multiple,
-  };
-
   using CommandMangler =
       llvm::unique_function<void(tooling::CompileCommand &, PathRef) const>;
 
@@ -59,7 +53,6 @@ public:
   std::optional<std::string> getModuleNameForSource(PathRef File);
   std::optional<std::string> getSourceForModuleName(llvm::StringRef ModuleName,
                                                     PathRef RequiredSrcFile);
-  ModuleNameState getModuleNameState(llvm::StringRef ModuleName);
 
   void setCommandMangler(CommandMangler Mangler);
 

@@ -981,36 +981,6 @@ int use() { return m_value; }
 }
 
 TEST_F(PrerequisiteModulesTests,
-       UniqueModuleNameStateResolvedFromCompileCommands) {
-  PerFileModulesCompilationDatabase CDB(TestDir, FS);
-
-  SmallString<256> MPcm(TestDir);
-  llvm::sys::path::append(MPcm, "build", "M.pcm");
-
-  CDB.addFile("M.cppm", R"cpp(
-export module M;
-export int value = 1;
-  )cpp",
-              {"--precompile", "-o", std::string(MPcm)});
-  CDB.addFile("A.cpp", R"cpp(
-import M;
-int useA() { return value; }
-  )cpp",
-              {"-fmodule-file=M=" + std::string(MPcm)});
-  CDB.addFile("B.cpp", R"cpp(
-import M;
-int useB() { return value; }
-  )cpp",
-              {"-fmodule-file=M=" + std::string(MPcm)});
-
-  auto ProjectModules = CDB.getProjectModules(getFullPath("A.cpp"));
-  ASSERT_TRUE(ProjectModules);
-
-  EXPECT_EQ(ProjectModules->getModuleNameState("M"),
-            ProjectModules::ModuleNameState::Unique);
-}
-
-TEST_F(PrerequisiteModulesTests,
        DuplicateModuleNamesResolvedFromCompileCommands) {
   PerFileModulesCompilationDatabase CDB(TestDir, FS);
 
@@ -1042,8 +1012,6 @@ int useB() { return onlyB; }
 
   auto ProjectModules = CDB.getProjectModules(getFullPath("a/Use.cpp"));
   ASSERT_TRUE(ProjectModules);
-  EXPECT_EQ(ProjectModules->getModuleNameState("M"),
-            ProjectModules::ModuleNameState::Multiple);
 
   EXPECT_EQ(
       ProjectModules->getSourceForModuleName("M", getFullPath("a/Use.cpp")),
@@ -1129,8 +1097,6 @@ int useB() { return onlyB; }
 
   auto ProjectModules = CDB.getProjectModules(getFullPath("a/Use.cpp"));
   ASSERT_TRUE(ProjectModules);
-  EXPECT_EQ(ProjectModules->getModuleNameState("M"),
-            ProjectModules::ModuleNameState::Multiple);
 
   EXPECT_EQ(
       ProjectModules->getSourceForModuleName("M", getFullPath("a/Use.cpp")),

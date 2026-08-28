@@ -15,7 +15,6 @@
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Path.h"
 #include "llvm/TargetParser/Host.h"
@@ -175,6 +174,8 @@ public:
   std::vector<std::string>
   getRequiredModules(PathRef File,
                      const ProjectModules::CommandMangler &Mangler);
+
+  void invalidate() { invalidateGlobalScan(); }
 
 private:
   /// Scanning every source file in the current project to get the
@@ -374,11 +375,9 @@ std::optional<std::string> ModuleDependencyScanner::getSourceForModuleName(
 /// older scanning-only approach of guessing the module unit from the module
 /// name alone.
 ///
-/// One subtle point is that producer commands alone do not reliably tell us the
-/// module name associated with a BMI path. In practice this backend learns that
-/// association from consumer `-fmodule-file=` entries, and then uses the BMI
-/// path to recover the producer source file. That is why indexing is built from
-/// both producer and consumer commands.
+/// Producer commands alone do not reliably tell us the module name associated
+/// with a BMI path. The consumer's `-fmodule-file=` entry provides that mapping
+/// for each query, and the producer index maps the BMI path back to its source.
 ///
 /// Note that compilation database can be stale, so results from this helper
 /// should be treated as preferred hints rather than unquestionable truth.
@@ -389,16 +388,6 @@ public:
       std::shared_ptr<const clang::tooling::CompilationDatabase> CDB,
       const ThreadsafeFS &TFS)
       : CDB(std::move(CDB)), TFS(TFS) {}
-
-  ProjectModules::ModuleNameState
-  getModuleNameState(llvm::StringRef ModuleName) {
-    indexProducerCommands();
-    auto It = ModuleNameToDistinctSources.find(ModuleName);
-    if (It == ModuleNameToDistinctSources.end())
-      return ProjectModules::ModuleNameState::Unknown;
-    return It->second.size() > 1 ? ProjectModules::ModuleNameState::Multiple
-                                 : ProjectModules::ModuleNameState::Unique;
-  }
 
   std::optional<std::string>
   getSourceForModuleName(llvm::StringRef ModuleName,
@@ -423,10 +412,27 @@ public:
     this->Mangler = std::move(Mangler);
     ProducerCommandsIndexed = false;
     PCMToSource.clear();
-    ModuleNameToDistinctSources.clear();
   }
 
 private:
+  /// Builds the BMI path to producer source index from compile commands.
+  void indexProducerCommands() {
+    if (ProducerCommandsIndexed)
+      return;
+
+    for (const auto &File : CDB->getAllFiles()) {
+      auto Parsed = parseFileCommand(File);
+      if (!Parsed)
+        continue;
+
+      if (Parsed->OutputModuleFile)
+        PCMToSource[maybeCaseFoldPath(*Parsed->OutputModuleFile)] =
+            Parsed->SourceFile;
+    }
+
+    ProducerCommandsIndexed = true;
+  }
+
   /// Parses the compile command for \p File into the module information
   /// encoded in the command line.
   std::optional<ParsedCompileCommandInfo> parseFileCommand(PathRef File) const {
@@ -436,105 +442,12 @@ private:
     return parseCompileCommandInfo(std::move(*Cmd), TFS);
   }
 
-  /// Builds indexes from producer and consumer compile commands.
-  ///
-  /// Compile commands are parsed once up front. The first pass records which
-  /// source file produces each BMI path. The second pass walks consumer
-  /// commands, uses `-fmodule-file=` information to associate module names with
-  /// those BMI paths, and then records which producer source files are
-  /// referenced for each module name.
-  void indexProducerCommands() {
-    if (ProducerCommandsIndexed)
-      return;
-
-    std::vector<ParsedCompileCommandInfo> ParsedCommands;
-    auto AllFiles = CDB->getAllFiles();
-    ParsedCommands.reserve(AllFiles.size());
-    for (const auto &File : AllFiles) {
-      auto Parsed = parseFileCommand(File);
-      if (!Parsed)
-        continue;
-
-      if (Parsed->OutputModuleFile)
-        PCMToSource[maybeCaseFoldPath(*Parsed->OutputModuleFile)] =
-            Parsed->SourceFile;
-
-      ParsedCommands.push_back(std::move(*Parsed));
-    }
-
-    for (const auto &Parsed : ParsedCommands) {
-      for (const auto &Required : Parsed.RequiredModuleFiles) {
-        auto SourceIt =
-            PCMToSource.find(maybeCaseFoldPath(Required.getValue()));
-        if (SourceIt == PCMToSource.end())
-          continue;
-        ModuleNameToDistinctSources[Required.getKey()].insert(
-            maybeCaseFoldPath(SourceIt->second));
-      }
-    }
-
-    ProducerCommandsIndexed = true;
-  }
-
   std::shared_ptr<const clang::tooling::CompilationDatabase> CDB;
   const ThreadsafeFS &TFS;
   ProjectModules::CommandMangler Mangler;
   bool ProducerCommandsIndexed = false;
 
   llvm::StringMap<std::string> PCMToSource;
-
-  using DistinctSourceSet = llvm::StringSet<>;
-  llvm::StringMap<DistinctSourceSet> ModuleNameToDistinctSources;
-};
-
-class ModuleNameToSourceCache {
-public:
-  void clear() {
-    Unique.clear();
-    Multiple.clear();
-  }
-
-  std::optional<std::string> getUnique(llvm::StringRef ModuleName) const {
-    auto It = Unique.find(ModuleName);
-    if (It == Unique.end())
-      return std::nullopt;
-    return It->second;
-  }
-
-  void addUnique(llvm::StringRef ModuleName, PathRef Source) {
-    Unique[ModuleName] = Source.str();
-  }
-
-  void eraseUnique(llvm::StringRef ModuleName) { Unique.erase(ModuleName); }
-
-  std::optional<std::string> getMultiple(llvm::StringRef ModuleName,
-                                         PathRef RequiredSource) const {
-    auto Outer = Multiple.find(ModuleName);
-    if (Outer == Multiple.end())
-      return std::nullopt;
-    auto Inner = Outer->second.find(maybeCaseFoldPath(RequiredSource));
-    if (Inner == Outer->second.end())
-      return std::nullopt;
-    return Inner->second;
-  }
-
-  void addMultiple(llvm::StringRef ModuleName, PathRef RequiredSource,
-                   PathRef Source) {
-    Multiple[ModuleName][maybeCaseFoldPath(RequiredSource)] = Source.str();
-  }
-
-  void eraseMultiple(llvm::StringRef ModuleName, PathRef RequiredSource) {
-    auto Outer = Multiple.find(ModuleName);
-    if (Outer == Multiple.end())
-      return;
-    Outer->second.erase(maybeCaseFoldPath(RequiredSource));
-    if (Outer->second.empty())
-      Multiple.erase(Outer);
-  }
-
-private:
-  llvm::StringMap<std::string> Unique;
-  llvm::StringMap<llvm::StringMap<std::string>> Multiple;
 };
 
 class ProjectModules::Impl {
@@ -555,45 +468,7 @@ public:
 
   std::optional<std::string> getSourceForModuleName(llvm::StringRef ModuleName,
                                                     PathRef RequiredSource) {
-    const ProjectModules::ModuleNameState State =
-        getModuleNameState(ModuleName);
-
-    if (State == ProjectModules::ModuleNameState::Multiple) {
-      const std::optional<std::string> Cached =
-          Cache.getMultiple(ModuleName, RequiredSource);
-      if (Cached) {
-        const auto CachedModule = getModuleNameForSource(*Cached);
-        if (CachedModule && *CachedModule == ModuleName)
-          return Cached;
-        Cache.eraseMultiple(ModuleName, RequiredSource);
-      }
-
-      std::optional<std::string> Result =
-          findSourceForModuleName(ModuleName, RequiredSource);
-      if (Result)
-        Cache.addMultiple(ModuleName, RequiredSource, *Result);
-      return Result;
-    }
-
-    assert(State == ProjectModules::ModuleNameState::Unique ||
-           State == ProjectModules::ModuleNameState::Unknown);
-    auto Cached = Cache.getUnique(ModuleName);
-    if (Cached) {
-      auto CachedModule = getModuleNameForSource(*Cached);
-      if (CachedModule && *CachedModule == ModuleName)
-        return Cached;
-      Cache.eraseUnique(ModuleName);
-    }
-
-    auto Result = findSourceForModuleName(ModuleName, RequiredSource);
-    if (Result)
-      Cache.addUnique(ModuleName, *Result);
-    return Result;
-  }
-
-  ProjectModules::ModuleNameState
-  getModuleNameState(llvm::StringRef ModuleName) {
-    return CompileCommands.getModuleNameState(ModuleName);
+    return findSourceForModuleName(ModuleName, RequiredSource);
   }
 
   void setCommandMangler(ProjectModules::CommandMangler Mangler) {
@@ -603,7 +478,7 @@ public:
           if (this->Mangler)
             this->Mangler(Command, CommandPath);
         });
-    Cache.clear();
+    Scanner.invalidate();
   }
 
 private:
@@ -613,8 +488,7 @@ private:
         CompileCommands.getSourceForModuleName(ModuleName, RequiredSource);
     // Check if the source still declares the module.
     // This is to validate compile-command-derived results may be stale and
-    // scan a single file is fast enough. We just don't want to scan the project
-    // entirely.
+    // scanning a single file is fast enough.
     if (FromCompileCommands) {
       auto ScannedModule =
           Scanner.getModuleNameForSource(*FromCompileCommands, Mangler);
@@ -627,7 +501,6 @@ private:
 
   CompileCommandsProjectModules CompileCommands;
   ModuleDependencyScanner Scanner;
-  ModuleNameToSourceCache Cache;
   ProjectModules::CommandMangler Mangler;
 };
 
@@ -651,11 +524,6 @@ std::optional<std::string>
 ProjectModules::getSourceForModuleName(llvm::StringRef ModuleName,
                                        PathRef RequiredSource) {
   return PImpl->getSourceForModuleName(ModuleName, RequiredSource);
-}
-
-ProjectModules::ModuleNameState
-ProjectModules::getModuleNameState(llvm::StringRef ModuleName) {
-  return PImpl->getModuleNameState(ModuleName);
 }
 
 void ProjectModules::setCommandMangler(CommandMangler Mangler) {
