@@ -332,10 +332,10 @@ private:
   std::unique_ptr<GlobalCompilationDatabase> BaseCDB;
   // CDB is BaseCDB plus any commands overridden via LSP extensions.
   std::optional<OverlayCDB> CDB;
-  // The ClangdServer is created by the "initialize" LSP method.
-  std::optional<ClangdServer> Server;
   // Manages to build module files.
   std::optional<ModulesBuilder> ModulesManager;
+  // The ClangdServer is created by the "initialize" LSP method.
+  std::optional<ClangdServer> Server;
 };
 } // namespace clangd
 } // namespace clang
