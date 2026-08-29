@@ -456,12 +456,6 @@ public:
     return Scanner.getRequiredModules(File, Mangler);
   }
 
-  std::optional<std::string> getModuleNameForSource(PathRef File) {
-    // Return scanning results directly as it is fast enough and up to date.
-    std::lock_guard<std::mutex> Lock(Mu);
-    return Scanner.getModuleNameForSource(File, Mangler);
-  }
-
   std::optional<std::string> getSourceForModuleName(llvm::StringRef ModuleName,
                                                     PathRef RequiredSource) {
     std::lock_guard<std::mutex> Lock(Mu);
@@ -512,11 +506,6 @@ ProjectModules::~ProjectModules() = default;
 
 std::vector<std::string> ProjectModules::getRequiredModules(PathRef File) {
   return PImpl->getRequiredModules(File);
-}
-
-std::optional<std::string>
-ProjectModules::getModuleNameForSource(PathRef File) {
-  return PImpl->getModuleNameForSource(File);
 }
 
 std::optional<std::string>

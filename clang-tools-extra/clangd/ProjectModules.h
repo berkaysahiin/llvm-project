@@ -50,7 +50,6 @@ public:
   ProjectModules &operator=(const ProjectModules &) = delete;
 
   std::vector<std::string> getRequiredModules(PathRef File);
-  std::optional<std::string> getModuleNameForSource(PathRef File);
   std::optional<std::string> getSourceForModuleName(llvm::StringRef ModuleName,
                                                     PathRef RequiredSrcFile);
 
