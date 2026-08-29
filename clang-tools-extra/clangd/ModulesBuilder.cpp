@@ -928,10 +928,12 @@ private:
   std::shared_ptr<ProjectEntry> projectFor(PathRef File) {
     const std::string Key = projectKey(getCDB().getProjectInfo(File), File);
 
-    std::lock_guard<std::mutex> Lock(ProjectsMutex);
-    const auto It = Projects.find(Key);
-    if (It != Projects.end())
-      return It->second;
+    {
+      std::lock_guard<std::mutex> Lock(ProjectsMutex);
+      const auto It = Projects.find(Key);
+      if (It != Projects.end())
+        return It->second;
+    }
 
     std::unique_ptr<ProjectModules> Modules = getCDB().getProjectModules(File);
     if (!Modules)
@@ -939,8 +941,10 @@ private:
 
     std::shared_ptr<ProjectEntry> Project =
         std::make_shared<ProjectEntry>(std::move(Modules));
-    Projects.try_emplace(Key, Project);
-    return Project;
+
+    std::lock_guard<std::mutex> Lock(ProjectsMutex);
+    auto Inserted = Projects.try_emplace(Key, Project);
+    return Inserted.first->second;
   }
 
   const GlobalCompilationDatabase &getCDB() const { return Cache.getCDB(); }
