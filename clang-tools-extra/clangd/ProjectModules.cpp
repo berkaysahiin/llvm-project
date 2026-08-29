@@ -16,6 +16,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/CommandLine.h"
+#include <mutex>
 #include "llvm/Support/Path.h"
 #include "llvm/TargetParser/Host.h"
 
@@ -458,20 +459,24 @@ public:
 
   std::vector<std::string> getRequiredModules(PathRef File) {
     // Return scanning results directly as it is fast enough and up to date.
+    std::lock_guard<std::mutex> Lock(Mu);
     return Scanner.getRequiredModules(File, Mangler);
   }
 
   std::optional<std::string> getModuleNameForSource(PathRef File) {
     // Return scanning results directly as it is fast enough and up to date.
+    std::lock_guard<std::mutex> Lock(Mu);
     return Scanner.getModuleNameForSource(File, Mangler);
   }
 
   std::optional<std::string> getSourceForModuleName(llvm::StringRef ModuleName,
                                                     PathRef RequiredSource) {
+    std::lock_guard<std::mutex> Lock(Mu);
     return findSourceForModuleName(ModuleName, RequiredSource);
   }
 
   void setCommandMangler(ProjectModules::CommandMangler Mangler) {
+    std::lock_guard<std::mutex> Lock(Mu);
     this->Mangler = std::move(Mangler);
     CompileCommands.setCommandMangler(
         [this](tooling::CompileCommand &Command, PathRef CommandPath) {
@@ -481,7 +486,7 @@ public:
     Scanner.invalidate();
   }
 
-private:
+ private:
   std::optional<std::string> findSourceForModuleName(llvm::StringRef ModuleName,
                                                      PathRef RequiredSource) {
     auto FromCompileCommands =
@@ -502,6 +507,7 @@ private:
   CompileCommandsProjectModules CompileCommands;
   ModuleDependencyScanner Scanner;
   ProjectModules::CommandMangler Mangler;
+  std::mutex Mu;
 };
 
 ProjectModules::ProjectModules(

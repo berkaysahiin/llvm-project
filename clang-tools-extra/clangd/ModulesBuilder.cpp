@@ -922,7 +922,6 @@ private:
     ProjectEntry(std::unique_ptr<ProjectModules> Modules)
         : Modules(std::move(Modules)) {}
 
-    std::mutex Mutex;
     std::unique_ptr<ProjectModules> Modules;
   };
 
@@ -1155,7 +1154,6 @@ bool ModulesBuilder::ModulesBuilderImpl::hasRequiredModules(PathRef File) {
   if (!Project)
     return false;
 
-  std::lock_guard<std::mutex> Lock(Project->Mutex);
   return !Project->Modules->getRequiredModules(File).empty();
 }
 
@@ -1165,7 +1163,6 @@ ModulesBuilder::ModulesBuilderImpl::getRequiredModuleNames(PathRef File) {
   if (!Project)
     return {};
 
-  std::lock_guard<std::mutex> Lock(Project->Mutex);
   return Project->Modules->getRequiredModules(File);
 }
 
@@ -1178,7 +1175,6 @@ ModulesBuilder::ModulesBuilderImpl::buildPrerequisiteModulesFor(
     return std::make_unique<FailedPrerequisiteModules>();
   }
 
-  std::lock_guard<std::mutex> Lock(Project->Mutex);
   std::vector<std::string> RequiredModuleNames =
       Project->Modules->getRequiredModules(File);
   if (RequiredModuleNames.empty())
