@@ -913,10 +913,7 @@ public:
                        ReusablePrerequisiteModules &BuiltModuleFiles);
 
 private:
-  void invalidateProjects(const std::vector<std::string> &) {
-    std::lock_guard<std::mutex> Lock(ProjectsMutex);
-    Projects.clear();
-  }
+  void invalidateProjects(const std::vector<std::string> &ChangedFiles);
 
   struct ProjectEntry {
     ProjectEntry(std::unique_ptr<ProjectModules> Modules)
@@ -964,6 +961,24 @@ private:
   llvm::StringSet<> GarbageCollectedProjectRoots;
   GlobalCompilationDatabase::CommandChanged::Subscription CDBWatch;
 };
+
+void ModulesBuilder::ModulesBuilderImpl::invalidateProjects(
+    const std::vector<std::string> &ChangedFiles) {
+  if (ChangedFiles.empty()) {
+    std::lock_guard<std::mutex> Lock(ProjectsMutex);
+    Projects.clear();
+    return;
+  }
+
+  llvm::SmallVector<std::string> AffectedRoots;
+  AffectedRoots.reserve(ChangedFiles.size());
+  for (const auto &File : ChangedFiles)
+    AffectedRoots.push_back(projectKey(getCDB().getProjectInfo(File), File));
+
+  std::lock_guard<std::mutex> Lock(ProjectsMutex);
+  for (const auto &Root : AffectedRoots)
+    Projects.erase(Root);
+}
 
 void ModulesBuilder::ModulesBuilderImpl::
     garbageCollectModuleCacheForProjectRoot(PathRef ProjectRoot) {
