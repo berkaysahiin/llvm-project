@@ -26,6 +26,7 @@
 #include "llvm/Support/Process.h"
 
 #include <chrono>
+#include <cstdint>
 #include <ctime>
 #include <optional>
 
@@ -916,10 +917,11 @@ private:
   void invalidateProjects(const std::vector<std::string> &ChangedFiles);
 
   struct ProjectEntry {
-    ProjectEntry(std::unique_ptr<ProjectModules> Modules)
-        : Modules(std::move(Modules)) {}
+    ProjectEntry(std::unique_ptr<ProjectModules> Modules, uint64_t Generation)
+        : Modules(std::move(Modules)), Generation(Generation) {}
 
     std::unique_ptr<ProjectModules> Modules;
+    uint64_t Generation;
   };
 
   std::shared_ptr<ProjectEntry> projectFor(PathRef File);
@@ -937,6 +939,10 @@ private:
   ModuleFileCache Cache;
   std::mutex ProjectsMutex;
   llvm::StringMap<std::shared_ptr<ProjectEntry>> Projects;
+  // Bumped on every invalidation. Entries with a mismatched Generation are
+  // stale and are rebuilt on demand.
+  uint64_t Generation = 0;
+
   std::mutex GarbageCollectedProjectRootsMutex;
   llvm::StringSet<> GarbageCollectedProjectRoots;
   GlobalCompilationDatabase::CommandChanged::Subscription CDBWatch;
@@ -944,43 +950,45 @@ private:
 
 void ModulesBuilder::ModulesBuilderImpl::invalidateProjects(
     const std::vector<std::string> &ChangedFiles) {
-  if (ChangedFiles.empty()) {
-    std::lock_guard<std::mutex> Lock(ProjectsMutex);
-    Projects.clear();
-    return;
-  }
-
-  llvm::SmallVector<std::string> AffectedRoots;
-  AffectedRoots.reserve(ChangedFiles.size());
-  for (const auto &File : ChangedFiles)
-    AffectedRoots.push_back(projectKey(getCDB().getProjectInfo(File), File));
-
   std::lock_guard<std::mutex> Lock(ProjectsMutex);
-  for (const auto &Root : AffectedRoots)
-    Projects.erase(Root);
+  ++Generation;
+  if (ChangedFiles.empty())
+    Projects.clear();
 }
 
 std::shared_ptr<ModulesBuilder::ModulesBuilderImpl::ProjectEntry>
 ModulesBuilder::ModulesBuilderImpl::projectFor(PathRef File) {
-  const std::string Key = projectKey(getCDB().getProjectInfo(File), File);
+  // Retry if the CDB changes while we build.
+  for (unsigned Attempt = 0; Attempt != 2; ++Attempt) {
+    const std::string Key = projectKey(getCDB().getProjectInfo(File), File);
+    uint64_t Gen;
+    {
+      std::lock_guard<std::mutex> Lock(ProjectsMutex);
+      const auto It = Projects.find(Key);
+      if (It != Projects.end() && It->second->Generation == Generation)
+        return It->second;
+      Gen = Generation;
+    }
 
-  {
+    std::unique_ptr<ProjectModules> Modules = getCDB().getProjectModules(File);
+    if (!Modules)
+      return nullptr;
+
+    auto Entry = std::make_shared<ProjectEntry>(std::move(Modules), Gen);
+
     std::lock_guard<std::mutex> Lock(ProjectsMutex);
-    const auto It = Projects.find(Key);
-    if (It != Projects.end())
-      return It->second;
+    // Discard the entry if the CDB changed while we built it.
+    if (Gen != Generation)
+      continue;
+
+    auto [It, Inserted] = Projects.try_emplace(Key, Entry);
+    if (!Inserted && It->second->Generation != Generation)
+      It->second = Entry; // Overwrite a stale entry.
+    return It->second;
   }
 
-  std::unique_ptr<ProjectModules> Modules = getCDB().getProjectModules(File);
-  if (!Modules)
-    return nullptr;
-
-  std::shared_ptr<ProjectEntry> Project =
-      std::make_shared<ProjectEntry>(std::move(Modules));
-
-  std::lock_guard<std::mutex> Lock(ProjectsMutex);
-  auto Inserted = Projects.try_emplace(Key, Project);
-  return Inserted.first->second;
+  // CDB is changing too fast. Let the next request rebuild.
+  return nullptr;
 }
 
 void ModulesBuilder::ModulesBuilderImpl::
