@@ -16,9 +16,9 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/CommandLine.h"
-#include <mutex>
 #include "llvm/Support/Path.h"
 #include "llvm/TargetParser/Host.h"
+#include <mutex>
 
 namespace clang::clangd {
 namespace {
@@ -479,7 +479,7 @@ public:
     Scanner.invalidate();
   }
 
- private:
+private:
   std::optional<std::string> findSourceForModuleName(llvm::StringRef ModuleName,
                                                      PathRef RequiredSource) {
     auto FromCompileCommands =
