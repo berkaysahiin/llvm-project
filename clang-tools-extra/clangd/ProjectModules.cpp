@@ -298,6 +298,7 @@ bool ModuleDependencyScanner::globalScan(
   if (GlobalScanned)
     return false;
 
+  ModuleNameToSource.clear();
   std::unique_ptr<dependencies::DependencyScanningService> Service =
       scanningService();
   for (auto &File : CDB->getAllFiles())
