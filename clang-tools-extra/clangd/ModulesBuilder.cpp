@@ -922,27 +922,7 @@ private:
     std::unique_ptr<ProjectModules> Modules;
   };
 
-  std::shared_ptr<ProjectEntry> projectFor(PathRef File) {
-    const std::string Key = projectKey(getCDB().getProjectInfo(File), File);
-
-    {
-      std::lock_guard<std::mutex> Lock(ProjectsMutex);
-      const auto It = Projects.find(Key);
-      if (It != Projects.end())
-        return It->second;
-    }
-
-    std::unique_ptr<ProjectModules> Modules = getCDB().getProjectModules(File);
-    if (!Modules)
-      return nullptr;
-
-    std::shared_ptr<ProjectEntry> Project =
-        std::make_shared<ProjectEntry>(std::move(Modules));
-
-    std::lock_guard<std::mutex> Lock(ProjectsMutex);
-    auto Inserted = Projects.try_emplace(Key, Project);
-    return Inserted.first->second;
-  }
+  std::shared_ptr<ProjectEntry> projectFor(PathRef File);
 
   const GlobalCompilationDatabase &getCDB() const { return Cache.getCDB(); }
 
@@ -978,6 +958,29 @@ void ModulesBuilder::ModulesBuilderImpl::invalidateProjects(
   std::lock_guard<std::mutex> Lock(ProjectsMutex);
   for (const auto &Root : AffectedRoots)
     Projects.erase(Root);
+}
+
+std::shared_ptr<ModulesBuilder::ModulesBuilderImpl::ProjectEntry>
+ModulesBuilder::ModulesBuilderImpl::projectFor(PathRef File) {
+  const std::string Key = projectKey(getCDB().getProjectInfo(File), File);
+
+  {
+    std::lock_guard<std::mutex> Lock(ProjectsMutex);
+    const auto It = Projects.find(Key);
+    if (It != Projects.end())
+      return It->second;
+  }
+
+  std::unique_ptr<ProjectModules> Modules = getCDB().getProjectModules(File);
+  if (!Modules)
+    return nullptr;
+
+  std::shared_ptr<ProjectEntry> Project =
+      std::make_shared<ProjectEntry>(std::move(Modules));
+
+  std::lock_guard<std::mutex> Lock(ProjectsMutex);
+  auto Inserted = Projects.try_emplace(Key, Project);
+  return Inserted.first->second;
 }
 
 void ModulesBuilder::ModulesBuilderImpl::
