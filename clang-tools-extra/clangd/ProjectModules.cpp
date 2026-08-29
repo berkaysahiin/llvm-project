@@ -341,7 +341,7 @@ std::optional<std::string> ModuleDependencyScanner::getModuleNameForSource(
 
 std::optional<std::string> ModuleDependencyScanner::getSourceForModuleName(
     llvm::StringRef ModuleName, const ProjectModules::CommandMangler &Mangler) {
-  bool Scanned = globalScan(Mangler);
+  globalScan(Mangler);
   PathRef Source = lookupSourceForModuleName(ModuleName);
   if (!Source.empty()) {
     auto ScanningResult = scan(Source, Mangler);
@@ -349,15 +349,7 @@ std::optional<std::string> ModuleDependencyScanner::getSourceForModuleName(
       return Source.str();
   }
 
-  if (Scanned)
-    return std::nullopt;
-
-  invalidateGlobalScan();
-  globalScan(Mangler);
-  PathRef Result = lookupSourceForModuleName(ModuleName);
-  if (Result.empty())
-    return std::nullopt;
-  return Result.str();
+  return std::nullopt;
 }
 } // namespace
 
